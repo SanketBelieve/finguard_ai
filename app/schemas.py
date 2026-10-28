@@ -65,12 +65,22 @@ class DisputeIntakeRequest(BaseModel):
         @field_validator("amount_inr", mode="before")  # type: ignore[misc]
         @classmethod
         def _coerce_amount_v2(cls, v: Any) -> float:
+            """Convert the amount to float before field bounds are validated.
+
+            Strip rupee signs, commas, and whitespace from strings.
+            Raise ValueError, TypeError, or OverflowError if float conversion fails.
+            """
             if isinstance(v, str):
                 return float(re.sub(r"[₹,\s]", "", v))
             return float(v)
     else:
         @validator("amount_inr", pre=True)  # type: ignore[misc]
         def _coerce_amount_v1(cls, v: Any) -> float:
+            """Convert the amount to float before field bounds are validated.
+
+            Strip rupee signs, commas, and whitespace from strings.
+            Raise ValueError, TypeError, or OverflowError if float conversion fails.
+            """
             if isinstance(v, str):
                 return float(re.sub(r"[₹,\s]", "", v))
             return float(v)
@@ -104,6 +114,11 @@ class TriageVerdict(BaseModel):
     if PYDANTIC_V2:
         @model_validator(mode="after")  # type: ignore[misc]
         def _check_citations_v2(self) -> "TriageVerdict":
+            """Return this verdict if its citation requirement is satisfied.
+
+            Out-of-scope and GUARDRAIL_FALLBACK verdicts may omit citations.
+            Otherwise, raise ValueError for missing citations.
+            """
             if (
                 self.dispute_category != DisputeCategory.OUT_OF_SCOPE_QUERY
                 and self.routed_via != "GUARDRAIL_FALLBACK"
@@ -114,6 +129,12 @@ class TriageVerdict(BaseModel):
     else:
         @root_validator  # type: ignore[misc]
         def _check_citations_v1(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+            """Return values unchanged if their citation requirement is satisfied.
+
+            Out-of-scope and GUARDRAIL_FALLBACK verdicts may omit citations.
+            Missing or empty citations otherwise raise ValueError, which Pydantic
+            wraps in a validation error.
+            """
             cat = values.get("dispute_category")
             route = values.get("routed_via")
             cits = values.get("citations") or []

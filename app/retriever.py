@@ -107,16 +107,26 @@ class HybridComplianceRetriever:
     """
 
     def __init__(self, corpus: Sequence[RegulatoryDocumentChunk] = RBI_REGULATORY_CORPUS, min_threshold: float = 0.22) -> None:
+        """Copy corpus chunks and prepare their vectors for retrieval.
+
+        ``min_threshold`` is the inclusive cutoff for rounded relevance scores.
+        """
         self.corpus = list(corpus)
         self.min_threshold = min_threshold
         self._doc_vectors = [self._embed_text(f"{c.title} {c.section_ref} {c.content}") for c in self.corpus]
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
+        """Return lowercase runs of ASCII letters, digits, and plus signs."""
         return re.findall(r"[a-z0-9\+]+", text.lower())
 
     @classmethod
     def _embed_text(cls, text: str, dim: int = 128) -> List[float]:
+        """Return a normalized hashed token/bigram vector with ``dim`` components.
+
+        A zero vector stays zero. A token-bearing input with ``dim=0`` raises
+        ZeroDivisionError; negative dimensions raise IndexError for such input.
+        """
         vec = [0.0] * dim
         tokens = cls._tokenize(text)
         features = list(tokens)
@@ -132,11 +142,28 @@ class HybridComplianceRetriever:
 
     @staticmethod
     def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+        """Return the dot product clipped at zero.
+
+        This equals clipped cosine similarity for unit vectors. Ignore any
+        unpaired trailing components.
+        """
         return max(0.0, sum(x * y for x, y in zip(a, b)))
 
     def retrieve_and_rerank(
         self, query: str, payment_rail: PaymentRail, delay_hours: int, top_k: int = 2
     ) -> List[RBIComplianceCitation]:
+        """Return citations in descending relevance order, or [] if none qualify.
+
+        Match the narrative using lexical and vector scores, with payment-rail
+        and reporting-delay boosts. ``delay_hours`` is elapsed time from alert
+        to report; fraud matches use <=72, 73-168, and >168 hour bands.
+        Scores are capped at 0.99, rounded to three decimals, and filtered by
+        the inclusive minimum threshold. Ties retain corpus order.
+
+        ``top_k`` uses slice semantics: zero returns no citations and a negative
+        value omits that many qualifying citations from the end. Citation model
+        validation errors propagate.
+        """
         query_lower = query.lower()
         query_tokens = set(self._tokenize(query))
         q_vec = self._embed_text(query)

@@ -31,10 +31,26 @@ class FinGuardTriageEngine:
     """
 
     def __init__(self, db_path: str = ":memory:") -> None:
+        """Prepare the built-in regulatory corpus and open the SQLite audit store.
+
+        ``db_path`` defaults to a private in-memory database. Database setup
+        errors propagate as sqlite3.Error.
+        """
         self.retriever = HybridComplianceRetriever(RBI_REGULATORY_CORPUS)
         self.sql_store = ComplianceSQLStore(db_path=db_path)
 
     def process_dispute(self, req: DisputeIntakeRequest) -> TriageVerdict:
+        """Return a triage verdict and commit its audit record before returning.
+
+        Reject out-of-scope matches without retrieval; missing citations instead
+        produce a human-escalation fallback. After fast routing, fraud matches
+        use reporting-delay thresholds of <=72, 73-168, and >168 elapsed hours;
+        credential-sharing matches select human escalation. Remaining cases use
+        failed-debit reversal terms. The verdict's latency excludes audit logging.
+
+        Retrieval, Pydantic validation, and SQLite audit errors propagate rather
+        than being converted to fallback verdicts.
+        """
         t0 = time.perf_counter()
         narrative_lower = req.customer_narrative.lower()
 

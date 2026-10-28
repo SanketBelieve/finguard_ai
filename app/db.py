@@ -29,11 +29,17 @@ class ComplianceSQLStore:
     )
 
     def __init__(self, db_path: str = ":memory:") -> None:
+        """Open a SQLite audit database and create its table if absent.
+
+        ``db_path`` defaults to a private in-memory database. Connection and
+        schema errors propagate as sqlite3.Error.
+        """
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
     def _init_schema(self) -> None:
+        """Create the audit table if absent; propagate sqlite3.Error on failure."""
         with self.conn:
             self.conn.execute(
                 """
@@ -58,6 +64,11 @@ class ComplianceSQLStore:
             )
 
     def log_verdict(self, req: DisputeIntakeRequest, verdict: TriageVerdict) -> None:
+        """Commit an audit row with a UTC timestamp and the first citation's ID.
+
+        Store a null circular ID when citations are empty. Database failures
+        propagate as sqlite3.Error.
+        """
         primary_circular = verdict.citations[0].circular_id if verdict.citations else None
         with self.conn:
             self.conn.execute(
@@ -88,8 +99,12 @@ class ComplianceSQLStore:
             )
 
     def execute_safe_readonly_sql(self, query: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
-        """
-        MCP-compatible read-only SQL executor with strict scope & keyword sanitization.
+        """Execute a filtered SELECT with bound params and return rows as dicts.
+
+        Raise PermissionError unless the stripped query starts with SELECT and
+        contains neither a forbidden SQL keyword nor a nonfinal semicolon.
+        Filtering also applies inside literals and comments. A final semicolon
+        is allowed; SQLite execution and binding errors propagate as sqlite3.Error.
         """
         stripped = query.strip()
         if not stripped.upper().startswith("SELECT"):
@@ -100,6 +115,11 @@ class ComplianceSQLStore:
         return [dict(row) for row in cur.fetchall()]
 
     def get_recent_audit_logs(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return audit summaries from newest to oldest insertion.
+
+        ``limit`` uses SQLite LIMIT semantics: zero returns no rows and negative
+        values remove the limit. Database errors propagate as sqlite3.Error.
+        """
         return self.execute_safe_readonly_sql(
             """
             SELECT transaction_id, customer_id, payment_rail, amount_inr,
@@ -113,6 +133,12 @@ class ComplianceSQLStore:
         )
 
     def get_operational_metrics(self) -> Dict[str, Any]:
+        """Return aggregate audit counts, latency, cost, and routing percentages.
+
+        Latency is in ms and cost is in INR per 1,000 requests.
+        An empty store returns a zero count and None for the other metrics.
+        Database errors propagate as sqlite3.Error.
+        """
         rows = self.execute_safe_readonly_sql(
             """
             SELECT
