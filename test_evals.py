@@ -883,17 +883,17 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
 
 
 def test_day7_documentation_and_adr_completeness() -> None:
-    """Verifies README.md (Mermaid diagram + benchmarks) and DECISIONS.md (ADR-001..ADR-007)."""
-    readme_path = Path("README.md")
-    decisions_path = Path("DECISIONS.md") if Path("DECISIONS.md").exists() else Path("decisions.md")
-    if readme_path.exists():
-        readme_text = readme_path.read_text(encoding="utf-8")
-        assert "```mermaid" in readme_text
-        assert "INR 14.36" in readme_text
-    if decisions_path.exists():
-        decisions_text = decisions_path.read_text(encoding="utf-8")
-        for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
-            assert adr_id in decisions_text, f"Missing {adr_id} in DECISIONS.md"
+    """Verifies README.md (Mermaid diagram + benchmarks) and decisions.md (ADR-001..ADR-007)."""
+    readme_path = Path("README.md") if Path("README.md").exists() else Path(__file__).resolve().parent / "README.md"
+    decisions_path = Path("decisions.md") if Path("decisions.md").exists() else Path(__file__).resolve().parent / "decisions.md"
+    assert readme_path.exists(), "README.md does not exist"
+    assert decisions_path.exists(), "decisions.md does not exist"
+    readme_text = readme_path.read_text(encoding="utf-8")
+    assert "```mermaid" in readme_text
+    assert "INR 14.36" in readme_text
+    decisions_text = decisions_path.read_text(encoding="utf-8")
+    for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
+        assert adr_id in decisions_text, f"Missing {adr_id} in decisions.md"
 
 
 def test_pydantic_coerces_formatted_inr_strings() -> None:

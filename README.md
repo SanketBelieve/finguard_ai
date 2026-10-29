@@ -28,7 +28,7 @@ flowchart TD
     Router -->|"Clear UPI/IMPS/NEFT/RTGS TAT\nor Duplicate Debit (36.1%)"| FastPath["Deterministic TAT Auto-Resolution\n(T+1 Reversal + INR 100/day Penalty)"]
     Router -->|"Complex Fraud / Negligence / Delay"| Retriever["HybridComplianceRetriever\n(Dense Vector + BM25 + Priority Reranker)"]
 
-    PDFs["RBI Master Direction PDFs\n(rbi_circulars/*.pdf)"] -->|"pdfplumber Page & Table Extraction"| VectorStore[("RegulatoryVectorStore\nsqlite_vec | ChromaDB | pgvector")]
+    PDFs["RBI Master Direction PDFs\n(rbi_circulars/*.pdf)\n[Generated samples when official PDFs absent;\nverify contents & citations against official docs]"] -->|"pdfplumber Page & Table Extraction"| VectorStore[("RegulatoryVectorStore\nsqlite_vec | ChromaDB | pgvector")]
     VectorStore --> Retriever
 
     Retriever -->|"Top-K PDF + Page Citations"| LLMSynth["StructuredLLMSynthesizer\n(.with_structured_output(LLMSynthesisDraft))"]
@@ -62,12 +62,15 @@ flowchart TD
 ```bash
 pip install fastapi uvicorn pydantic pdfplumber reportlab numpy pytest
 python3 ci_eval_gate.py --generate-workflow
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Open `http://localhost:8000/docs` to test endpoints interactively in Swagger UI.
 
-### Option B: Containerized Stack (`FastAPI` + `PostgreSQL pgvector`)
+### Option B: Containerized Microservice Stack (Docker Compose)
+
+> [!NOTE]
+> `docker-compose.yml` provisions a PostgreSQL `pgvector` service for persistent deployments. In the default configuration, `FinGuardTriageEngine` runs with local `sqlite_vec` and in-memory audit storage (`:memory:`); audit records are stored in process memory (separate per worker and reset on container restart). Persistent PostgreSQL storage can be connected via `PGVECTOR_DSN`.
 
 ```bash
 python3 ci_eval_gate.py --generate-workflow

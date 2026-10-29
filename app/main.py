@@ -30,8 +30,12 @@ _app_dir = Path(__file__).resolve().parent
 if str(_app_dir) not in sys.path:
     sys.path.insert(0, str(_app_dir))
 
-from engine import FinGuardTriageEngine
-from schemas import DisputeIntakeRequest, TriageVerdict
+try:
+    from app.engine import FinGuardTriageEngine
+    from app.schemas import DisputeIntakeRequest, TriageVerdict
+except ImportError:
+    from engine import FinGuardTriageEngine
+    from schemas import DisputeIntakeRequest, TriageVerdict
 
 try:
     from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -123,7 +127,7 @@ COPY --from=builder /build/wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \\
     && rm -rf /wheels
 
-COPY schemas.py router.py retriever.py database.py engine.py main.py test_evals.py ci_eval_gate.py ./
+COPY app/schemas.py app/router.py app/retriever.py app/database.py app/engine.py app/main.py test_evals.py ci_eval_gate.py ./
 
 RUN mkdir -p /app/rbi_circulars && chown -R finguard:finguard /app
 USER finguard
