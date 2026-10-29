@@ -60,7 +60,10 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/v1/disputes/triage", response_model=TriageVerdict)
     async def triage_dispute_endpoint(payload: DisputeIntakeRequest) -> TriageVerdict:
-        """Synchronously triages a payment dispute and logs the audit record to SQL."""
+        """Synchronously triages a payment dispute and logs the audit record to SQL.
+
+        Convert processing failures to HTTP 500 with the exception text as detail.
+        """
         try:
             return engine.process_dispute(payload)
         except Exception as exc:
@@ -68,9 +71,19 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/v1/disputes/stream")
     async def stream_dispute_triage(payload: DisputeIntakeRequest) -> StreamingResponse:
-        """Streams step-by-step triage progress via Server-Sent Events (SSE) for JavaScript UIs."""
+        """Stream SSE data events for the router check, citation count, and verdict.
+
+        Triage and audit logging finish after the first event and before the
+        citation-count event. Processing and serialization errors terminate the
+        stream without a structured error event.
+        """
 
         async def event_generator() -> AsyncGenerator[str, None]:
+            """Yield JSON SSE frames for router check, citations, and verdict.
+
+            Process and audit the dispute after the first frame. Processing and
+            JSON serialization errors propagate to the stream.
+            """
             yield f"data: {json.dumps({'step': 'ROUTER_CHECK', 'transaction_id': payload.transaction_id})}\n\n"
             verdict = engine.process_dispute(payload)
             yield f"data: {json.dumps({'step': 'CITATIONS_RETRIEVED', 'count': len(verdict.citations)})}\n\n"
@@ -118,6 +131,7 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/health")
     async def health_endpoint() -> Dict[str, str]:
+        """Return static status, service, and region metadata without probing dependencies."""
         return {"status": "healthy", "service": "finguard-ai", "region": "ap-south-1 (Pune/Mumbai)"}
 else:
     app = None
