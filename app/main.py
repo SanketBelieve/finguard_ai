@@ -363,6 +363,11 @@ if FASTAPI_AVAILABLE:
             )
 
         async def event_generator() -> AsyncGenerator[str, None]:
+            """Yield JSON SSE frames for router check, citations, and verdict.
+
+            Process and audit the dispute after the first frame. Processing and
+            JSON serialization errors propagate to the stream.
+            """
             yield f"data: {json.dumps({'step': 'ROUTER_CHECK', 'transaction_id': payload.transaction_id})}\n\n"
             verdict = engine.process_dispute(payload)
             yield f"data: {json.dumps({'step': 'CITATIONS_RETRIEVED', 'count': len(verdict.citations)})}\n\n"

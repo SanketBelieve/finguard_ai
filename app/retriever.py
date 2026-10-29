@@ -620,6 +620,18 @@ class HybridComplianceRetriever:
     def retrieve_and_rerank(
         self, query: str, payment_rail: PaymentRail, delay_hours: int, top_k: int = 2
     ) -> List[RBIComplianceCitation]:
+        """Return citations in descending relevance order, or [] if none qualify.
+
+        Match the narrative using lexical and vector scores, with payment-rail
+        and reporting-delay boosts. ``delay_hours`` is elapsed time from alert
+        to report; fraud matches use <=72, 73-168, and >168 hour bands.
+        Scores are capped at 0.99, rounded to three decimals, and filtered by
+        the inclusive minimum threshold. Ties retain corpus order.
+
+        ``top_k`` uses slice semantics: zero returns no citations and a negative
+        value omits that many qualifying citations from the end. Citation model
+        validation errors propagate.
+        """
         query_lower = query.lower()
         query_tokens = set(self._tokenize(query))
 
