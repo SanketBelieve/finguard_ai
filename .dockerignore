@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.git/
+.github/
+.env
+*.db
+chroma_db/
+eval_report.json

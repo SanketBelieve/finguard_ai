@@ -36,6 +36,7 @@ if str(_here) not in sys.path:
 
 from database import ComplianceSQLStore
 from engine import FinGuardTriageEngine
+from main import SlidingWindowRateLimiter, validate_container_manifests
 from retriever import RBIPDFChunker, RegulatoryVectorStore
 from router import DeterministicFinTechRouter
 from schemas import (
@@ -886,6 +887,30 @@ def test_adversarial_prompt_injection_is_blocked_without_leak() -> None:
     assert len(verdict.citations) == 0
 
 
+def test_day6_sliding_window_rate_limiter_enforces_quota() -> None:
+    limiter = SlidingWindowRateLimiter(max_requests=3, window_seconds=60.0)
+    t_start = 1000.0
+    for expected_rem in (2, 1, 0):
+        allowed, rem, retry = limiter.check_request("ip:192.168.1.10", now=t_start)
+        assert allowed is True
+        assert rem == expected_rem
+        assert retry == 0
+
+    allowed_4th, rem_4th, retry_4th = limiter.check_request("ip:192.168.1.10", now=t_start + 5.0)
+    assert allowed_4th is False
+    assert rem_4th == 0
+    assert retry_4th == 55
+
+    allowed_after, rem_after, _ = limiter.check_request("ip:192.168.1.10", now=t_start + 61.0)
+    assert allowed_after is True
+    assert rem_after == 2
+
+
+def test_day6_docker_and_compose_manifests_valid() -> None:
+    checks = validate_container_manifests(".")
+    assert all(checks.values()), f"Container checks failed: {checks}"
+
+
 def test_pydantic_coerces_formatted_inr_strings() -> None:
     req = DisputeIntakeRequest(
         customer_id="CUST-9001",
@@ -912,17 +937,19 @@ if __name__ == "__main__":
     test_day3_structured_llm_synthesis_happy_path()
     test_day3_llm_timeout_triggers_deterministic_fallback()
     test_adversarial_prompt_injection_is_blocked_without_leak()
+    test_day6_sliding_window_rate_limiter_enforces_quota()
+    test_day6_docker_and_compose_manifests_valid()
     test_pydantic_coerces_formatted_inr_strings()
     test_sql_guardrail_blocks_destructive_queries()
     test_eval_suite_passes_quality_gates()
 
     summary = run_evaluation_suite()
     print("=" * 100)
-    print("DAY 4 FINGUARD AI — 36-CASE GOLDEN EVALUATION, PROMPT-INJECTION DEFENSE & QUALITY GATES")
+    print("DAY 6 FINGUARD AI — CONTAINERIZATION, RATE LIMITING & 36-CASE GOLDEN EVAL BENCHMARK")
     print("=" * 100)
-    print("Unit, PDF, LLM, Security & Fallback Tests : 7 / 7 PASSED")
-    print(f"Total Golden Evaluation Cases             : {summary['total_cases']} cases")
-    print(f"Indexed RBI PDF Chunks                    : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
+    print("Unit, PDF, LLM, Security, Rate-Limit & Docker Tests : 9 / 9 PASSED")
+    print(f"Total Golden Evaluation Cases                       : {summary['total_cases']} cases")
+    print(f"Indexed RBI PDF Chunks                              : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
     print(f"Verdict Accuracy                          : {summary['verdict_accuracy_pct']}%")
     print(f"PDF Citation Faithfulness                 : {summary['citation_faithfulness_pct']}% (exact PDF + Page match)")
     print(f"Prompt Injection Block Rate               : {summary['prompt_injection_block_rate_pct']}% (0% leak)")
