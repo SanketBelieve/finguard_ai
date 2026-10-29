@@ -23,8 +23,17 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
+
+_here = Path(__file__).resolve().parent
+_app_dir = _here if _here.name == "app" else _here / "app"
+if _app_dir.is_dir() and str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
 
 from database import ComplianceSQLStore
 from engine import FinGuardTriageEngine
@@ -872,6 +881,20 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
     assert all(checks.values()), f"Container checks failed: {checks}"
 
 
+def test_day7_documentation_and_adr_completeness() -> None:
+    """Verifies README.md (Mermaid diagram + benchmarks) and decisions.md (ADR-001..ADR-007)."""
+    readme_path = Path("README.md") if Path("README.md").exists() else Path(__file__).resolve().parent.parent / "README.md"
+    decisions_path = Path("decisions.md") if Path("decisions.md").exists() else Path(__file__).resolve().parent.parent / "decisions.md"
+    assert readme_path.exists(), "README.md does not exist"
+    assert decisions_path.exists(), "decisions.md does not exist"
+    readme_text = readme_path.read_text(encoding="utf-8")
+    assert "```mermaid" in readme_text
+    assert "INR 14.36" in readme_text
+    decisions_text = decisions_path.read_text(encoding="utf-8")
+    for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
+        assert adr_id in decisions_text, f"Missing {adr_id} in decisions.md"
+
+
 def test_pydantic_coerces_formatted_inr_strings() -> None:
     req = DisputeIntakeRequest(
         customer_id="CUST-9001",
@@ -900,17 +923,18 @@ if __name__ == "__main__":
     test_adversarial_prompt_injection_is_blocked_without_leak()
     test_day6_sliding_window_rate_limiter_enforces_quota()
     test_day6_docker_and_compose_manifests_valid()
+    test_day7_documentation_and_adr_completeness()
     test_pydantic_coerces_formatted_inr_strings()
     test_sql_guardrail_blocks_destructive_queries()
     test_eval_suite_passes_quality_gates()
 
     summary = run_evaluation_suite()
     print("=" * 100)
-    print("DAY 6 FINGUARD AI — CONTAINERIZATION, RATE LIMITING & 36-CASE GOLDEN EVAL BENCHMARK")
+    print("WEEK 1 COMPLETE (DAYS 1–7) — FINGUARD AI PRODUCTION BENCHMARK & VERIFICATION")
     print("=" * 100)
-    print("Unit, PDF, LLM, Security, Rate-Limit & Docker Tests : 9 / 9 PASSED")
-    print(f"Total Golden Evaluation Cases                       : {summary['total_cases']} cases")
-    print(f"Indexed RBI PDF Chunks                              : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
+    print("All Unit, PDF, LLM, Security, Rate-Limit, Docker & ADR Tests : 10 / 10 PASSED")
+    print(f"Total Golden Evaluation Cases                                : {summary['total_cases']} cases")
+    print(f"Indexed RBI PDF Chunks                                       : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
     print(f"Verdict Accuracy                                    : {summary['verdict_accuracy_pct']}%")
     print(f"PDF Citation Faithfulness                           : {summary['citation_faithfulness_pct']}% (exact PDF + Page match)")
     print(f"Prompt Injection Block Rate                         : {summary['prompt_injection_block_rate_pct']}% (0% leak)")

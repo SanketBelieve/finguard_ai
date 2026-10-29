@@ -30,11 +30,11 @@ jobs:
 
       - name: Run Pytest Unit, PDF, LLM Fallback & Security Suite
         run: |
-          PYTHONPATH=. pytest test_evals.py -v
+          PYTHONPATH=.:app pytest test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
-          PYTHONPATH=. python3 ci_eval_gate.py \
+          PYTHONPATH=.:app python3 ci_eval_gate.py \
             --min-accuracy 98.0 \
             --min-faithfulness 98.0 \
             --min-injection-block 100.0 \

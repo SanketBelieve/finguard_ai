@@ -36,7 +36,7 @@ COPY --from=builder /build/wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
     && rm -rf /wheels
 
-COPY schemas.py router.py retriever.py database.py engine.py main.py test_evals.py ci_eval_gate.py ./
+COPY app/schemas.py app/router.py app/retriever.py app/database.py app/engine.py app/main.py test_evals.py ci_eval_gate.py ./
 
 RUN mkdir -p /app/rbi_circulars && chown -R finguard:finguard /app
 USER finguard

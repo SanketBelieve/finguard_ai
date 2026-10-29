@@ -1,11 +1,11 @@
 """
-ci_eval_gate.py — Day 5-6 GitHub Actions CI/CD Quality Gate & PR Scorecard Runner
+ci_eval_gate.py — Day 5-7 GitHub Actions CI/CD Quality Gate & PR Scorecard Runner
 =================================================================================
 Enforces automated regression thresholds on every `git push` and `pull_request`
 for FinGuard AI:
-  1. Executes all 9 unit, PDF (`pdfplumber`), LLM structured output, timeout
+  1. Executes all 10 unit, PDF (`pdfplumber`), LLM structured output, timeout
      fallback, prompt-injection security, sliding-window rate limiter, Docker
-     manifest, and SQL guardrail tests.
+     manifest, ADR documentation, and SQL guardrail tests.
   2. Runs the 36-case Golden Dataset Evaluation Suite and checks strict
      production thresholds:
        - Verdict Accuracy          >= 98.0% (Baseline naive RAG: 76.0%)
@@ -31,6 +31,8 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 _here = Path(__file__).resolve().parent
 _app_dir = _here if _here.name == "app" else _here / "app"
 if _app_dir.is_dir() and str(_app_dir) not in sys.path:
@@ -38,19 +40,39 @@ if _app_dir.is_dir() and str(_app_dir) not in sys.path:
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
-from main import generate_container_manifests
-from test_evals import (
-    run_evaluation_suite,
-    test_adversarial_prompt_injection_is_blocked_without_leak,
-    test_day3_llm_timeout_triggers_deterministic_fallback,
-    test_day3_structured_llm_synthesis_happy_path,
-    test_day6_docker_and_compose_manifests_valid,
-    test_day6_sliding_window_rate_limiter_enforces_quota,
-    test_eval_suite_passes_quality_gates,
-    test_pdfplumber_ingests_and_indexes_real_pdfs,
-    test_pydantic_coerces_formatted_inr_strings,
-    test_sql_guardrail_blocks_destructive_queries,
-)
+try:
+    from app.main import generate_container_manifests
+except ImportError:
+    from main import generate_container_manifests
+
+try:
+    from app.test_evals import (
+        run_evaluation_suite,
+        test_adversarial_prompt_injection_is_blocked_without_leak,
+        test_day3_llm_timeout_triggers_deterministic_fallback,
+        test_day3_structured_llm_synthesis_happy_path,
+        test_day6_docker_and_compose_manifests_valid,
+        test_day6_sliding_window_rate_limiter_enforces_quota,
+        test_day7_documentation_and_adr_completeness,
+        test_eval_suite_passes_quality_gates,
+        test_pdfplumber_ingests_and_indexes_real_pdfs,
+        test_pydantic_coerces_formatted_inr_strings,
+        test_sql_guardrail_blocks_destructive_queries,
+    )
+except ImportError:
+    from test_evals import (
+        run_evaluation_suite,
+        test_adversarial_prompt_injection_is_blocked_without_leak,
+        test_day3_llm_timeout_triggers_deterministic_fallback,
+        test_day3_structured_llm_synthesis_happy_path,
+        test_day6_docker_and_compose_manifests_valid,
+        test_day6_sliding_window_rate_limiter_enforces_quota,
+        test_day7_documentation_and_adr_completeness,
+        test_eval_suite_passes_quality_gates,
+        test_pdfplumber_ingests_and_indexes_real_pdfs,
+        test_pydantic_coerces_formatted_inr_strings,
+        test_sql_guardrail_blocks_destructive_queries,
+    )
 
 
 GITHUB_ACTIONS_WORKFLOW_YAML = """name: FinGuard AI — CI/CD RAG & Security Quality Gate
@@ -85,11 +107,11 @@ jobs:
 
       - name: Run Pytest Unit, PDF, LLM Fallback, Rate-Limit & Security Suite
         run: |
-          PYTHONPATH=. pytest test_evals.py -v
+          PYTHONPATH=.:app pytest test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
-          PYTHONPATH=. python3 ci_eval_gate.py \\
+          PYTHONPATH=.:app python3 ci_eval_gate.py \\
             --min-accuracy 98.0 \\
             --min-faithfulness 98.0 \\
             --min-injection-block 100.0 \\
@@ -144,7 +166,7 @@ def generate_ci_files(base_dir: str | Path = ".") -> Tuple[Path, Path]:
 
 
 def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
-    """Executes all 9 deterministic unit, PDF, LLM, rate-limiter, Docker, and security tests."""
+    """Executes all 10 deterministic unit, PDF, LLM, rate-limiter, Docker, ADR, and security tests."""
     checks = [
         ("PDF Extraction & Vector Indexing (`pdfplumber`)", test_pdfplumber_ingests_and_indexes_real_pdfs),
         ("Structured LLM Output Happy Path (`.with_structured_output`)", test_day3_structured_llm_synthesis_happy_path),
@@ -152,6 +174,7 @@ def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
         ("Adversarial Prompt-Injection & Jailbreak Defense", test_adversarial_prompt_injection_is_blocked_without_leak),
         ("Sliding-Window API Rate Limiter (HTTP 429 Quota)", test_day6_sliding_window_rate_limiter_enforces_quota),
         ("Multi-Stage Dockerfile & Compose Security Manifests", test_day6_docker_and_compose_manifests_valid),
+        ("Architecture Decision Records (`README.md` & `DECISIONS.md`)", test_day7_documentation_and_adr_completeness),
         ("Pydantic Currency Coercion & Schema Validation", test_pydantic_coerces_formatted_inr_strings),
         ("Read-Only SQL Sanitizer (`DROP TABLE` Blocked)", test_sql_guardrail_blocks_destructive_queries),
         ("36-Case Golden Dataset Quality Gate Assertions", test_eval_suite_passes_quality_gates),
@@ -246,7 +269,7 @@ def build_markdown_scorecard(
     lines.extend(
         [
             "",
-            "## 2. Automated Unit, PDF, LLM Fallback, Rate-Limit & Docker Checks",
+            "## 2. Automated Unit, PDF, LLM Fallback, Rate-Limit, Docker & ADR Checks",
             "",
             "| Check Name | Status |",
             "| :--- | :--- |",
@@ -304,7 +327,7 @@ def main(argv: List[str] | None = None) -> int:
     Path(args.export_json).write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
     print("=" * 100)
-    print("DAY 6 FINGUARD AI — CI/CD QUALITY GATE, RATE LIMITER & DOCKER VERIFICATION")
+    print("DAY 7 FINGUARD AI — FULL WEEK 1 CI/CD QUALITY GATE & DOCUMENTATION VERIFICATION")
     print("=" * 100)
     for g in gates:
         badge = "PASS" if g["passed"] else "FAIL"
@@ -321,7 +344,7 @@ def main(argv: List[str] | None = None) -> int:
         print("CI/CD QUALITY GATE FAILED: Blocking Pull Request Merge.", file=sys.stderr)
         return 1
 
-    print("CI/CD QUALITY GATE PASSED: All 9 test suites & 5 regression gates green.")
+    print("CI/CD QUALITY GATE PASSED: All 10 test suites & 5 regression gates green.")
     return 0
 
 
