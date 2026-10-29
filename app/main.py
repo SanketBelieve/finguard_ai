@@ -1,7 +1,20 @@
 """
 main.py — FastAPI Application & REST/SSE Endpoints for FinGuard AI
 ==================================================================
+Includes Day 3 LLM Synthesis & Fallback Telemetry Endpoints:
+  - GET  /v1/llm/status
+  - POST /v1/disputes/triage
+  - POST /v1/disputes/stream
+  - POST /v1/corpus/ingest-pdfs
+  - GET  /v1/corpus/chunks
+  - GET  /v1/audit/history
+  - GET  /v1/metrics
 
+Launch server:
+    uvicorn main:app --reload --port 8000
+
+Interactive Swagger UI:
+    http://localhost:8000/docs
 """
 
 from __future__ import annotations
@@ -28,15 +41,15 @@ engine = FinGuardTriageEngine()
 if FASTAPI_AVAILABLE:
     app = FastAPI(
         title="FinGuard AI — RBI Compliance & Dispute Triage API",
-        version="1.0.0",
+        version="1.3.0",
         description=(
             "Modular FastAPI service combining a sub-15ms Deterministic Router, "
-            "Hybrid BM25+Vector RAG Retriever over RBI Master Directions, and "
-            "a Parameterized SQL Audit Store."
+            "`pdfplumber` RBI Circular Ingestion + Hybrid BM25/Vector Store, "
+            "Day 3 `.with_structured_output()` LLM Synthesis with Deterministic Fallback, "
+            "and a Parameterized SQL Audit Store."
         ),
     )
 
-    # Enable CORS for React / Next.js frontend integration
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -79,6 +92,33 @@ if FASTAPI_AVAILABLE:
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
+    @app.get("/v1/llm/status")
+    async def llm_status_endpoint() -> Dict[str, Any]:
+        """Returns active LLM synthesis configuration, timeout budget, and fallback policy."""
+        return {
+            "live_llm_configured": engine.llm_synthesizer.is_configured,
+            "active_provider": engine.llm_synthesizer.provider_name,
+            "timeout_seconds": engine.llm_synthesizer.timeout_seconds,
+            "max_retries": engine.llm_synthesizer.max_retries,
+            "fallback_mode": "deterministic_rbi_policy_engine",
+        }
+
+    @app.post("/v1/corpus/ingest-pdfs")
+    async def ingest_pdfs_endpoint(pdf_dir: str = Query(default="rbi_circulars")) -> Dict[str, Any]:
+        """Re-scans `pdf_dir` with `pdfplumber`, chunks pages, and upserts vectors."""
+        count = engine.retriever.refresh_pdf_corpus(pdf_dir=pdf_dir)
+        return {
+            "status": "indexed",
+            "pdf_directory": pdf_dir,
+            "vector_backend": engine.retriever.vector_store.backend,
+            "chunks_indexed": count,
+        }
+
+    @app.get("/v1/corpus/chunks")
+    async def list_indexed_chunks_endpoint() -> List[Dict[str, Any]]:
+        """Lists all RBI PDF chunks currently stored in the vector database."""
+        return engine.retriever.vector_store.list_all_chunks()
+
     @app.get("/v1/audit/history")
     async def audit_history_endpoint(limit: int = Query(default=20, ge=1, le=100)) -> List[Dict[str, Any]]:
         """Returns recent parameterized SQL audit records."""
@@ -86,7 +126,7 @@ if FASTAPI_AVAILABLE:
 
     @app.get("/v1/metrics")
     async def metrics_endpoint() -> Dict[str, Any]:
-        """Returns aggregated SQL latency, cost per 1,000 queries, and router bypass metrics."""
+        """Returns aggregated SQL latency, cost per 1,000 queries, router bypass, and LLM fallback metrics."""
         return engine.sql_store.get_operational_metrics()
 
     @app.get("/health")
