@@ -20,23 +20,13 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, AsyncGenerator, Deque, Dict, List, Tuple
 
-# Ensure the app directory is on sys.path so modules in app/ can import sibling modules
-_app_dir = Path(__file__).resolve().parent
-if str(_app_dir) not in sys.path:
-    sys.path.insert(0, str(_app_dir))
-
-try:
-    from engine import FinGuardTriageEngine
-    from schemas import DisputeIntakeRequest, TriageVerdict
-except ImportError:
-    from app.engine import FinGuardTriageEngine
-    from app.schemas import DisputeIntakeRequest, TriageVerdict
+from engine import FinGuardTriageEngine
+from schemas import DisputeIntakeRequest, TriageVerdict
 
 try:
     from fastapi import FastAPI, HTTPException, Query, Request, Response

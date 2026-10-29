@@ -1,3 +1,0 @@
-"""
-FinGuard AI Service Package
-"""

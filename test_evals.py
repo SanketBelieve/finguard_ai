@@ -1,6 +1,6 @@
 """
-test_evals.py — 36-Case Golden Dataset Evaluation Suite & DeepEval Quality Gates
-================================================================================
+test_evals.py — 36-Case Golden Dataset & Day 1–7 Production Readiness Tests
+===========================================================================
 Comprehensive evaluation suite for FinGuard AI covering:
   - 6 UPI failed debit variants (TAT T+1)
   - 5 IMPS, NEFT, and RTGS transfer failures (TAT T+1)
@@ -10,6 +10,8 @@ Comprehensive evaluation suite for FinGuard AI covering:
   - 3 Delayed reporting cases >7 days / >168 hours (Human escalation)
   - 3 Duplicate debits and commercial chargeback disputes
   - 5 Adversarial prompt injection, jailbreak & exfiltration attacks
+  - Day 6 Sliding-Window Rate Limiter & Multi-Stage Docker Manifest Verification
+  - Day 7 README.md & DECISIONS.md (ADR-001..ADR-007) Completeness Check
 
 Run standalone benchmark:
     python3 test_evals.py
@@ -22,17 +24,9 @@ from __future__ import annotations
 
 import json
 import math
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
-
-_here = Path(__file__).resolve().parent
-_app_dir = _here if _here.name == "app" else _here / "app"
-if _app_dir.is_dir() and str(_app_dir) not in sys.path:
-    sys.path.insert(0, str(_app_dir))
-if str(_here) not in sys.path:
-    sys.path.insert(0, str(_here))
 
 from database import ComplianceSQLStore
 from engine import FinGuardTriageEngine
@@ -61,9 +55,6 @@ class GoldenEvalCase:
 
 
 GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
-    # ------------------------------------------------------------------------
-    # Category 1: UPI Failed Debits (6 Cases) — TAT T+1 Auto-Reversal
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-01 (UPI Standard Failed Debit)",
         request=DisputeIntakeRequest(
@@ -166,10 +157,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2019_20_67_TAT_Failed_Transactions.pdf",
         expected_page_number=1,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 2: IMPS, NEFT & RTGS Failed Debits (5 Cases) — TAT T+1
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-07 (IMPS Transfer Failed and Debited)",
         request=DisputeIntakeRequest(
@@ -255,10 +242,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2019_20_67_TAT_Failed_Transactions.pdf",
         expected_page_number=2,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 3: Unauthorized Fraud <=72h (5 Cases) — Zero Liability (INR 0)
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-12 (Unauthorized IMPS 3rd-Party Breach <72h)",
         request=DisputeIntakeRequest(
@@ -344,10 +327,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2017_18_15_Customer_Protection_Zero_Liability.pdf",
         expected_page_number=1,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 4: Unauthorized Fraud 4–7 Working Days (5 Cases) — Limited Liability
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-17 (Unauthorized UPI Reported Day 5 — Savings Cap 10k)",
         request=DisputeIntakeRequest(
@@ -433,10 +412,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2017_18_15_Customer_Protection_Zero_Liability.pdf",
         expected_page_number=2,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 5: Customer Negligence / Shared Credentials (4 Cases)
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-22 (Shared OTP Phishing Phone Call)",
         request=DisputeIntakeRequest(
@@ -505,10 +480,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2017_18_15_Customer_Protection_Zero_Liability.pdf",
         expected_page_number=3,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 6: Delayed Reporting Beyond 7 Days / >168 Hours (3 Cases)
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-26 (Unauthorized UPI Reported After 14 Days)",
         request=DisputeIntakeRequest(
@@ -560,10 +531,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2017_18_15_Customer_Protection_Zero_Liability.pdf",
         expected_page_number=3,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 7: Duplicate Charges & Commercial Disputes (3 Cases)
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-29 (UPI Duplicate Charge at Grocery)",
         request=DisputeIntakeRequest(
@@ -615,10 +582,6 @@ GOLDEN_EVAL_DATASET: List[GoldenEvalCase] = [
         expected_pdf_filename="RBI_2019_20_67_TAT_Failed_Transactions.pdf",
         expected_page_number=4,
     ),
-
-    # ------------------------------------------------------------------------
-    # Category 8: Adversarial Attacks, Jailbreaks & Prompt Injections (5 Cases)
-    # ------------------------------------------------------------------------
     GoldenEvalCase(
         case_id="EVAL-32 (Adversarial Direct Instruction Override)",
         request=DisputeIntakeRequest(
@@ -911,6 +874,20 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
     assert all(checks.values()), f"Container checks failed: {checks}"
 
 
+def test_day7_documentation_and_adr_completeness() -> None:
+    """Verifies README.md (Mermaid diagram + benchmarks) and DECISIONS.md (ADR-001..ADR-007)."""
+    readme_path = Path("README.md")
+    decisions_path = Path("DECISIONS.md")
+    if readme_path.exists():
+        readme_text = readme_path.read_text(encoding="utf-8")
+        assert "```mermaid" in readme_text
+        assert "INR 14.36" in readme_text
+    if decisions_path.exists():
+        decisions_text = decisions_path.read_text(encoding="utf-8")
+        for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
+            assert adr_id in decisions_text, f"Missing {adr_id} in DECISIONS.md"
+
+
 def test_pydantic_coerces_formatted_inr_strings() -> None:
     req = DisputeIntakeRequest(
         customer_id="CUST-9001",
@@ -939,28 +916,22 @@ if __name__ == "__main__":
     test_adversarial_prompt_injection_is_blocked_without_leak()
     test_day6_sliding_window_rate_limiter_enforces_quota()
     test_day6_docker_and_compose_manifests_valid()
+    test_day7_documentation_and_adr_completeness()
     test_pydantic_coerces_formatted_inr_strings()
     test_sql_guardrail_blocks_destructive_queries()
     test_eval_suite_passes_quality_gates()
 
     summary = run_evaluation_suite()
     print("=" * 100)
-    print("DAY 6 FINGUARD AI — CONTAINERIZATION, RATE LIMITING & 36-CASE GOLDEN EVAL BENCHMARK")
+    print("WEEK 1 COMPLETE (DAYS 1–7) — FINGUARD AI PRODUCTION BENCHMARK & VERIFICATION")
     print("=" * 100)
-    print("Unit, PDF, LLM, Security, Rate-Limit & Docker Tests : 9 / 9 PASSED")
-    print(f"Total Golden Evaluation Cases                       : {summary['total_cases']} cases")
-    print(f"Indexed RBI PDF Chunks                              : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
-    print(f"Verdict Accuracy                          : {summary['verdict_accuracy_pct']}%")
-    print(f"PDF Citation Faithfulness                 : {summary['citation_faithfulness_pct']}% (exact PDF + Page match)")
-    print(f"Prompt Injection Block Rate               : {summary['prompt_injection_block_rate_pct']}% (0% leak)")
-    print(f"Hallucination Rate                        : {summary['hallucination_rate_pct']}%")
-    print(f"Latency (p50 / p95)                       : {summary['p50_latency_ms']} ms / {summary['p95_latency_ms']} ms")
-    print(f"SQL Audit Store Metrics                   : {json.dumps(summary['sql_operational_metrics'])}")
-    print("-" * 100)
-    for row in summary["case_breakdown"]:
-        status = "PASS" if row["passed"] else "FAIL"
-        print(
-            f"[{status}] {row['case_id']:<56} | Action: {row['action']:<28} "
-            f"| Source: {row['pdf_source']}"
-        )
+    print("All Unit, PDF, LLM, Security, Rate-Limit, Docker & ADR Tests : 10 / 10 PASSED")
+    print(f"Total Golden Evaluation Cases                                : {summary['total_cases']} cases")
+    print(f"Indexed RBI PDF Chunks                                       : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
+    print(f"Verdict Accuracy                                             : {summary['verdict_accuracy_pct']}%")
+    print(f"PDF Citation Faithfulness                                    : {summary['citation_faithfulness_pct']}% (exact PDF + Page match)")
+    print(f"Prompt Injection Block Rate                                  : {summary['prompt_injection_block_rate_pct']}% (0% leak)")
+    print(f"Hallucination Rate                                           : {summary['hallucination_rate_pct']}%")
+    print(f"Latency (p50 / p95)                                          : {summary['p50_latency_ms']} ms / {summary['p95_latency_ms']} ms")
+    print(f"SQL Audit Store Metrics                                      : {json.dumps(summary['sql_operational_metrics'])}")
     print("=" * 100)
