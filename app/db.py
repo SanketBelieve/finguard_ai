@@ -1,8 +1,9 @@
 """
 database.py — Parameterized SQL Audit Store & MCP Read-Only Sanitizer
 =====================================================================
-Logs every triage decision to SQLite/PostgreSQL and provides a read-only
-SQL query executor that blocks destructive DDL/DML queries.
+Logs every triage decision (including Day 3 `llm_provider_used` and
+`fallback_triggered` telemetry) to SQLite/PostgreSQL and provides a
+read-only SQL query executor that blocks destructive DDL/DML queries.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ class ComplianceSQLStore:
     SQLite / PostgreSQL-compatible audit store with:
       - Parameterized inserts for every triage decision
       - Read-only MCP tool query sanitizer (blocks DDL/DML injection)
-      - Built-in analytical SQL aggregations for latency, token cost & escalation rates
+      - Built-in analytical SQL aggregations for latency, token cost, router bypass & LLM fallback rates
     """
 
     FORBIDDEN_SQL_TOKENS = re.compile(
@@ -48,6 +49,8 @@ class ComplianceSQLStore:
                     escalation_action TEXT NOT NULL,
                     max_customer_liability_inr REAL NOT NULL,
                     routed_via TEXT NOT NULL,
+                    llm_provider_used TEXT NOT NULL,
+                    fallback_triggered INTEGER NOT NULL,
                     primary_circular_id TEXT,
                     confidence_score REAL NOT NULL,
                     latency_ms REAL NOT NULL,
@@ -65,9 +68,10 @@ class ComplianceSQLStore:
                 INSERT INTO dispute_triage_audit (
                     transaction_id, customer_id, payment_rail, amount_inr,
                     reporting_delay_hours, dispute_category, escalation_action,
-                    max_customer_liability_inr, routed_via, primary_circular_id,
-                    confidence_score, latency_ms, estimated_cost_inr, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    max_customer_liability_inr, routed_via, llm_provider_used,
+                    fallback_triggered, primary_circular_id, confidence_score,
+                    latency_ms, estimated_cost_inr, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     req.transaction_id,
@@ -79,6 +83,8 @@ class ComplianceSQLStore:
                     verdict.escalation_action.value,
                     verdict.max_customer_liability_inr,
                     verdict.routed_via,
+                    verdict.llm_provider_used,
+                    1 if verdict.fallback_triggered else 0,
                     primary_circular,
                     verdict.confidence_score,
                     verdict.latency_ms,
@@ -88,9 +94,6 @@ class ComplianceSQLStore:
             )
 
     def execute_safe_readonly_sql(self, query: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
-        """
-        MCP-compatible read-only SQL executor with strict scope & keyword sanitization.
-        """
         stripped = query.strip()
         if not stripped.upper().startswith("SELECT"):
             raise PermissionError("Security Guardrail: Only SELECT queries are permitted on the audit store.")
@@ -104,7 +107,8 @@ class ComplianceSQLStore:
             """
             SELECT transaction_id, customer_id, payment_rail, amount_inr,
                    dispute_category, escalation_action, max_customer_liability_inr,
-                   routed_via, primary_circular_id, confidence_score, latency_ms, created_at
+                   routed_via, llm_provider_used, fallback_triggered,
+                   primary_circular_id, confidence_score, latency_ms, created_at
             FROM dispute_triage_audit
             ORDER BY id DESC
             LIMIT ?
@@ -126,7 +130,11 @@ class ComplianceSQLStore:
                 ROUND(
                     100.0 * SUM(CASE WHEN escalation_action = 'HUMAN_COMPLIANCE_ESCALATION' THEN 1 ELSE 0 END)
                     / MAX(COUNT(*), 1), 1
-                ) AS human_escalation_pct
+                ) AS human_escalation_pct,
+                ROUND(
+                    100.0 * SUM(CASE WHEN fallback_triggered = 1 THEN 1 ELSE 0 END)
+                    / MAX(COUNT(*), 1), 1
+                ) AS llm_fallback_rate_pct
             FROM dispute_triage_audit
             """
         )

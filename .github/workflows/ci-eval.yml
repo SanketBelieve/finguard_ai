@@ -1,0 +1,54 @@
+name: FinGuard AI — CI/CD RAG & Security Quality Gate
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+jobs:
+  rag-and-security-quality-gate:
+    name: Run Unit Tests, SQL Guardrails & 36-Case Golden Eval Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pytest Unit, PDF, LLM Fallback & Security Suite
+        run: |
+          PYTHONPATH=. pytest test_evals.py -v
+
+      - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
+        run: |
+          PYTHONPATH=. python3 ci_eval_gate.py \
+            --min-accuracy 98.0 \
+            --min-faithfulness 98.0 \
+            --min-injection-block 100.0 \
+            --max-hallucination 2.0 \
+            --max-p95-ms 50.0 \
+            --export-markdown eval_report.md \
+            --export-json eval_report.json
+
+      - name: Upload Evaluation Scorecard Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finguard-ai-eval-scorecard
+          path: |
+            eval_report.md
+            eval_report.json
+          retention-days: 30

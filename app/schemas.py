@@ -1,15 +1,16 @@
 """
 schemas.py — Strict Pydantic Schemas & Validators for FinGuard AI
 =================================================================
-Defines request/response contracts, enums, currency coercion, and mandatory
-RBI regulatory citation grounding checks (compatible with Pydantic v1 & v2).
+Defines request/response contracts, enums, currency coercion, mandatory
+RBI regulatory citation grounding checks, and Day 3 `.with_structured_output()`
+LLM synthesis schemas (compatible with Pydantic v1 & v2).
 """
 
 from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -82,7 +83,27 @@ class RBIComplianceCitation(BaseModel):
     circular_id: str = Field(..., description="Official RBI circular or direction identifier")
     title: str = Field(..., description="Title of the regulatory clause")
     section_ref: str = Field(..., description="Exact section or paragraph reference")
+    source_pdf: str = Field(default="inline_corpus.pdf", description="Source PDF filename ingested via pdfplumber")
+    page_number: int = Field(default=1, ge=1, description="1-indexed PDF page number where clause appears")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Hybrid retrieval + reranker score")
+
+
+class LLMSynthesisDraft(BaseModel):
+    """
+    Day 3 schema passed to `llm.with_structured_output(LLMSynthesisDraft)`
+    for OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-haiku`), or local Ollama.
+    """
+
+    dispute_category: DisputeCategory = Field(..., description="Classified RBI dispute category")
+    escalation_action: EscalationAction = Field(..., description="Mandatory regulatory action to take")
+    max_customer_liability_inr: float = Field(..., ge=0.0, description="Calculated max customer liability in INR")
+    provisional_credit_due_days: int = Field(..., ge=0, le=90, description="Statutory turnaround days for reversal")
+    compensation_penalty_per_day_inr: float = Field(
+        ..., ge=0.0, description="Statutory penalty in INR/day if bank misses TAT"
+    )
+    rationale: str = Field(
+        ..., min_length=15, description="Grounded explanation citing retrieved RBI circular ID, PDF file, and page"
+    )
 
 
 class TriageVerdict(BaseModel):
@@ -96,6 +117,14 @@ class TriageVerdict(BaseModel):
     compensation_penalty_per_day_inr: float = Field(..., ge=0.0)
     confidence_score: float = Field(..., ge=0.0, le=1.0)
     routed_via: Literal["DETERMINISTIC_ROUTER", "HYBRID_RAG_AGENT", "GUARDRAIL_FALLBACK"]
+    llm_provider_used: str = Field(
+        default="deterministic_policy_fallback",
+        description="Identifier of the LLM provider used or 'deterministic_policy_fallback' on timeout/offline",
+    )
+    fallback_triggered: bool = Field(
+        default=False,
+        description="True when an LLM timeout, rate-limit, or error triggered deterministic policy fallback",
+    )
     citations: List[RBIComplianceCitation] = Field(default_factory=list)
     rationale: str = Field(..., min_length=15)
     latency_ms: float = Field(..., ge=0.0)
