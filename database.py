@@ -12,6 +12,9 @@ _app_dir = _here / "app"
 if _app_dir.is_dir() and str(_app_dir) not in sys.path:
     sys.path.insert(0, str(_app_dir))
 
-from app.db import ComplianceSQLStore
+try:
+    from db import ComplianceSQLStore
+except ImportError:
+    from app.db import ComplianceSQLStore
 
 __all__ = ["ComplianceSQLStore"]

@@ -14,7 +14,13 @@ import os
 import time
 from typing import Any, List, Optional, Protocol, Sequence, Tuple
 
-from database import ComplianceSQLStore
+try:
+    from db import ComplianceSQLStore
+except ImportError:
+    try:
+        from app.db import ComplianceSQLStore
+    except ImportError:
+        from database import ComplianceSQLStore
 from retriever import HybridComplianceRetriever
 from router import DeterministicFinTechRouter
 from schemas import (
