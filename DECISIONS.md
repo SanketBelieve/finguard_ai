@@ -30,7 +30,7 @@ This document records the core architectural decisions made while building **Fin
 
 * **Context**: External LLM APIs (OpenAI, Anthropic) experience intermittent gateway timeouts (`>2.5s`) and HTTP `429` rate limits. Furthermore, in regulated banking software, an LLM outage must never result in an unhandled HTTP `500` or an ungrounded liability calculation.
 * **Decision**: Use LangChain's `.with_structured_output(LLMSynthesisDraft)` (`engine.py`) with a 2.5-second timeout and 2 exponential-backoff retries, backed by `compute_deterministic_policy_fallback()`, which computes exact RBI statutory caps (`INR 0` for `<=72h`, `INR 10,000` savings cap / `INR 25,000` credit card cap for `4–7 days`, and human escalation for shared credentials or `>168h` delay). Every verdict logs `llm_provider_used` and `fallback_triggered` to SQL.
-* **Impact**: Guarantees **zero-downtime service availability** by preventing unhandled HTTP 500 crashes during upstream LLM outages (verified by `test_day3_llm_timeout_triggers_deterministic_fallback`). The elapsed-hours fallback logic evaluates raw elapsed hours and cannot account for weekends or statutory holidays; full compliance for borderline edge cases requires operational human review.
+* **Impact**: The simulated LLM timeout test (`test_day3_llm_timeout_triggers_deterministic_fallback`) verifies that the deterministic fallback returns a limited-liability review verdict with an INR 10,000 cap and a page-2 citation for the tested dispute. The fallback uses raw elapsed hours and cannot account for weekends or statutory holidays; statutory compliance requires operational human review.
 
 ## ADR-005: Parameterized SQL Audit Store & Read-Only MCP Query Sanitizer
 
