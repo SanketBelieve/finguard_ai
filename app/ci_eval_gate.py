@@ -33,6 +33,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+_here = Path(__file__).resolve().parent
+_app_dir = _here if _here.name == "app" else _here / "app"
+if _app_dir.is_dir() and str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
 from main import generate_container_manifests
 from test_evals import (
     run_evaluation_suite,
@@ -81,11 +88,11 @@ jobs:
 
       - name: Run Pytest Unit, PDF, LLM Fallback, Rate-Limit & Security Suite
         run: |
-          PYTHONPATH=. pytest test_evals.py -v
+          PYTHONPATH=.:app pytest test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
-          PYTHONPATH=. python3 ci_eval_gate.py \\
+          PYTHONPATH=.:app python3 ci_eval_gate.py \\
             --min-accuracy 98.0 \\
             --min-faithfulness 98.0 \\
             --min-injection-block 100.0 \\

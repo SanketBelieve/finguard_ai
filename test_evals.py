@@ -24,9 +24,17 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
+
+_here = Path(__file__).resolve().parent
+_app_dir = _here if _here.name == "app" else _here / "app"
+if _app_dir.is_dir() and str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
 
 from database import ComplianceSQLStore
 from engine import FinGuardTriageEngine
@@ -877,7 +885,7 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
 def test_day7_documentation_and_adr_completeness() -> None:
     """Verifies README.md (Mermaid diagram + benchmarks) and DECISIONS.md (ADR-001..ADR-007)."""
     readme_path = Path("README.md")
-    decisions_path = Path("DECISIONS.md")
+    decisions_path = Path("DECISIONS.md") if Path("DECISIONS.md").exists() else Path("decisions.md")
     if readme_path.exists():
         readme_text = readme_path.read_text(encoding="utf-8")
         assert "```mermaid" in readme_text

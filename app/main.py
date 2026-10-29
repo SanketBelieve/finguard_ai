@@ -20,10 +20,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, AsyncGenerator, Deque, Dict, List, Tuple
+
+_app_dir = Path(__file__).resolve().parent
+if str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
 
 from engine import FinGuardTriageEngine
 from schemas import DisputeIntakeRequest, TriageVerdict
