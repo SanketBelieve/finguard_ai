@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  finguard-db:
+    image: pgvector/pgvector:pg16
+    container_name: finguard-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finguard_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-finguard_compliance}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finguard} -d ${POSTGRES_DB:-finguard_compliance}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  finguard-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finguard-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      FINGUARD_RATE_LIMIT_PER_MIN: "${FINGUARD_RATE_LIMIT_PER_MIN:-60}"
+      PGVECTOR_DSN: "postgresql://${POSTGRES_USER:-finguard}:${POSTGRES_PASSWORD:-finguard_secret}@finguard-db:5432/${POSTGRES_DB:-finguard_compliance}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-}"
+      LANGCHAIN_TRACING_V2: "${LANGCHAIN_TRACING_V2:-false}"
+      LANGCHAIN_API_KEY: "${LANGCHAIN_API_KEY:-}"
+    depends_on:
+      finguard-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgvector_data:

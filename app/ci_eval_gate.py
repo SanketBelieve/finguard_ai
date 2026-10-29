@@ -1,10 +1,11 @@
 """
-ci_eval_gate.py — Day 5 GitHub Actions CI/CD Quality Gate & PR Scorecard Runner
-===============================================================================
+ci_eval_gate.py — Day 5-6 GitHub Actions CI/CD Quality Gate & PR Scorecard Runner
+=================================================================================
 Enforces automated regression thresholds on every `git push` and `pull_request`
 for FinGuard AI:
-  1. Executes all 7 unit, PDF (`pdfplumber`), LLM structured output, timeout
-     fallback, prompt-injection security, and SQL guardrail tests.
+  1. Executes all 9 unit, PDF (`pdfplumber`), LLM structured output, timeout
+     fallback, prompt-injection security, sliding-window rate limiter, Docker
+     manifest, and SQL guardrail tests.
   2. Runs the 36-case Golden Dataset Evaluation Suite and checks strict
      production thresholds:
        - Verdict Accuracy          >= 98.0% (Baseline naive RAG: 76.0%)
@@ -13,8 +14,8 @@ for FinGuard AI:
        - Hallucination Rate        <= 2.0%  (Baseline naive RAG: 23.0%)
        - p95 Latency               <= 50.0 ms
   3. Generates a Markdown Pull Request Scorecard (`eval_report.md` and
-     `$GITHUB_STEP_SUMMARY`) plus `.github/workflows/ci-eval.yml` and
-     `requirements.txt` via `--generate-workflow`.
+     `$GITHUB_STEP_SUMMARY`) plus `.github/workflows/ci-eval.yml`,
+     `requirements.txt`, `Dockerfile`, and `docker-compose.yml`.
 
 Usage:
     python3 ci_eval_gate.py
@@ -30,8 +31,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
-
 _here = Path(__file__).resolve().parent
 _app_dir = _here if _here.name == "app" else _here / "app"
 if _app_dir.is_dir() and str(_app_dir) not in sys.path:
@@ -39,21 +38,20 @@ if _app_dir.is_dir() and str(_app_dir) not in sys.path:
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
+from main import generate_container_manifests
 from test_evals import (
     run_evaluation_suite,
     test_adversarial_prompt_injection_is_blocked_without_leak,
     test_day3_llm_timeout_triggers_deterministic_fallback,
     test_day3_structured_llm_synthesis_happy_path,
+    test_day6_docker_and_compose_manifests_valid,
+    test_day6_sliding_window_rate_limiter_enforces_quota,
     test_eval_suite_passes_quality_gates,
     test_pdfplumber_ingests_and_indexes_real_pdfs,
     test_pydantic_coerces_formatted_inr_strings,
     test_sql_guardrail_blocks_destructive_queries,
 )
 
-
-# ============================================================================
-# 1. GITHUB ACTIONS WORKFLOW & REQUIREMENTS TEMPLATES
-# ============================================================================
 
 GITHUB_ACTIONS_WORKFLOW_YAML = """name: FinGuard AI — CI/CD RAG & Security Quality Gate
 
@@ -85,7 +83,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pytest Unit, PDF, LLM Fallback & Security Suite
+      - name: Run Pytest Unit, PDF, LLM Fallback, Rate-Limit & Security Suite
         run: |
           PYTHONPATH=. pytest test_evals.py -v
 
@@ -118,7 +116,8 @@ pdfplumber>=0.11.0
 reportlab>=4.0.0
 numpy>=1.24.0
 pytest>=8.0.0
-# Optional production vector & LLM integrations:
+# Optional production vector, rate-limiting & LLM integrations:
+# slowapi>=0.1.9
 # chromadb>=0.5.0
 # psycopg2-binary>=2.9.9
 # langchain-openai>=0.1.0
@@ -129,7 +128,7 @@ pytest>=8.0.0
 
 
 def generate_ci_files(base_dir: str | Path = ".") -> Tuple[Path, Path]:
-    """Writes `.github/workflows/ci-eval.yml` and `requirements.txt` to disk."""
+    """Writes `.github/workflows/ci-eval.yml`, `requirements.txt`, and Docker manifests."""
     root = Path(base_dir)
     workflow_dir = root / ".github" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
@@ -140,20 +139,19 @@ def generate_ci_files(base_dir: str | Path = ".") -> Tuple[Path, Path]:
     req_path = root / "requirements.txt"
     req_path.write_text(REQUIREMENTS_TXT, encoding="utf-8")
 
+    generate_container_manifests(root)
     return workflow_path, req_path
 
 
-# ============================================================================
-# 2. UNIT & SECURITY TEST RUNNER
-# ============================================================================
-
 def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
-    """Executes all 7 deterministic unit, PDF, LLM, and security tests."""
+    """Executes all 9 deterministic unit, PDF, LLM, rate-limiter, Docker, and security tests."""
     checks = [
         ("PDF Extraction & Vector Indexing (`pdfplumber`)", test_pdfplumber_ingests_and_indexes_real_pdfs),
         ("Structured LLM Output Happy Path (`.with_structured_output`)", test_day3_structured_llm_synthesis_happy_path),
         ("LLM Timeout -> Deterministic Policy Fallback", test_day3_llm_timeout_triggers_deterministic_fallback),
         ("Adversarial Prompt-Injection & Jailbreak Defense", test_adversarial_prompt_injection_is_blocked_without_leak),
+        ("Sliding-Window API Rate Limiter (HTTP 429 Quota)", test_day6_sliding_window_rate_limiter_enforces_quota),
+        ("Multi-Stage Dockerfile & Compose Security Manifests", test_day6_docker_and_compose_manifests_valid),
         ("Pydantic Currency Coercion & Schema Validation", test_pydantic_coerces_formatted_inr_strings),
         ("Read-Only SQL Sanitizer (`DROP TABLE` Blocked)", test_sql_guardrail_blocks_destructive_queries),
         ("36-Case Golden Dataset Quality Gate Assertions", test_eval_suite_passes_quality_gates),
@@ -168,10 +166,6 @@ def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
     return results
 
 
-# ============================================================================
-# 3. QUALITY GATE THRESHOLD VERIFIER & PR SCORECARD GENERATOR
-# ============================================================================
-
 def evaluate_quality_gates(
     summary: Dict[str, Any],
     min_accuracy: float = 98.0,
@@ -180,7 +174,6 @@ def evaluate_quality_gates(
     max_hallucination: float = 2.0,
     max_p95_ms: float = 50.0,
 ) -> List[Dict[str, Any]]:
-    """Compares actual evaluation metrics against strict CI/CD thresholds."""
     gates = [
         {
             "metric": "Verdict Accuracy (%)",
@@ -226,7 +219,6 @@ def build_markdown_scorecard(
     gates: List[Dict[str, Any]],
     summary: Dict[str, Any],
 ) -> str:
-    """Builds a GitHub Actions Job Summary / PR Markdown scorecard."""
     all_units_ok = all(ok for _, ok, _ in unit_results)
     all_gates_ok = all(g["passed"] for g in gates)
     overall_badge = "PASS — READY TO MERGE" if (all_units_ok and all_gates_ok) else "FAIL — MERGE BLOCKED"
@@ -254,7 +246,7 @@ def build_markdown_scorecard(
     lines.extend(
         [
             "",
-            "## 2. Automated Unit, PDF, LLM Fallback & Security Checks",
+            "## 2. Automated Unit, PDF, LLM Fallback, Rate-Limit & Docker Checks",
             "",
             "| Check Name | Status |",
             "| :--- | :--- |",
@@ -268,7 +260,7 @@ def build_markdown_scorecard(
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FinGuard AI CI/CD Quality Gate Runner")
-    parser.add_argument("--generate-workflow", action="store_true", help="Generate .github/workflows/ci-eval.yml and requirements.txt")
+    parser.add_argument("--generate-workflow", action="store_true", help="Generate CI & Docker files")
     parser.add_argument("--min-accuracy", type=float, default=98.0)
     parser.add_argument("--min-faithfulness", type=float, default=98.0)
     parser.add_argument("--min-injection-block", type=float, default=100.0)
@@ -282,6 +274,7 @@ def main(argv: List[str] | None = None) -> int:
         wf_path, req_path = generate_ci_files(".")
         print(f"[CI Generator] Wrote GitHub Actions workflow : {wf_path}")
         print(f"[CI Generator] Wrote Python requirements     : {req_path}")
+        print("[CI Generator] Wrote Dockerfile, docker-compose.yml, .env.example, and .dockerignore")
 
     unit_results = run_unit_and_security_tests()
     summary = run_evaluation_suite()
@@ -296,14 +289,12 @@ def main(argv: List[str] | None = None) -> int:
 
     md_report = build_markdown_scorecard(unit_results, gates, summary)
 
-    # Write Markdown scorecard & optional GitHub Actions Step Summary
     Path(args.export_markdown).write_text(md_report, encoding="utf-8")
     github_summary_path = os.getenv("GITHUB_STEP_SUMMARY")
     if github_summary_path:
         with open(github_summary_path, "a", encoding="utf-8") as f:
             f.write(md_report)
 
-    # Write JSON artifact
     json_payload = {
         "unit_tests_passed": all(ok for _, ok, _ in unit_results),
         "quality_gates_passed": all(g["passed"] for g in gates),
@@ -313,7 +304,7 @@ def main(argv: List[str] | None = None) -> int:
     Path(args.export_json).write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
     print("=" * 100)
-    print("DAY 5 FINGUARD AI — GITHUB ACTIONS CI/CD QUALITY GATE & REGRESSION RUNNER")
+    print("DAY 6 FINGUARD AI — CI/CD QUALITY GATE, RATE LIMITER & DOCKER VERIFICATION")
     print("=" * 100)
     for g in gates:
         badge = "PASS" if g["passed"] else "FAIL"
@@ -330,7 +321,7 @@ def main(argv: List[str] | None = None) -> int:
         print("CI/CD QUALITY GATE FAILED: Blocking Pull Request Merge.", file=sys.stderr)
         return 1
 
-    print("CI/CD QUALITY GATE PASSED: All 7 test suites & 5 regression gates green.")
+    print("CI/CD QUALITY GATE PASSED: All 9 test suites & 5 regression gates green.")
     return 0
 
 
