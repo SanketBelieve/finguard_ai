@@ -889,9 +889,11 @@ def test_day7_documentation_and_adr_completeness() -> None:
         else Path(__file__).resolve().parent.parent
     )
     readme_path = repo_root / "README.md"
-    decisions_path = repo_root / "decisions.md"
+    decisions_path = repo_root / "DECISIONS.md"
+    if not decisions_path.exists():
+        decisions_path = repo_root / "decisions.md"
     assert readme_path.exists(), f"README.md does not exist at {readme_path}"
-    assert decisions_path.exists(), f"decisions.md does not exist at {decisions_path}"
+    assert decisions_path.exists(), f"DECISIONS.md or decisions.md does not exist at {repo_root}"
 
     readme_text = readme_path.read_text(encoding="utf-8")
     assert "```mermaid" in readme_text
@@ -899,7 +901,7 @@ def test_day7_documentation_and_adr_completeness() -> None:
 
     decisions_text = decisions_path.read_text(encoding="utf-8")
     for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
-        assert adr_id in decisions_text, f"Missing {adr_id} in decisions.md"
+        assert adr_id in decisions_text, f"Missing {adr_id} in {decisions_path.name}"
 
 
 def test_phase2_mcp_server_tools_and_sql_audit() -> None:
