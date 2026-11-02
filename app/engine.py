@@ -17,10 +17,10 @@ from typing import  Any, Dict, List, Literal, Optional, Protocol, Sequence, Tupl
 from typing_extensions import Literal
 from database import ComplianceSQLStore, FinGuardMCPServer
 try:
-    from db import ComplianceSQLStore
+    from database import ComplianceSQLStore
 except ImportError:
     try:
-        from app.db import ComplianceSQLStore
+        from app.database import ComplianceSQLStore
     except ImportError:
         from database import ComplianceSQLStore
 from retriever import HybridComplianceRetriever
