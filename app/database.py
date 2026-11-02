@@ -224,11 +224,14 @@ class ComplianceSQLStore:
             cur = self.conn.execute(stripped, params)
             rows = cur.fetchmany(max_rows)
             return [dict(row) for row in rows]
-        except sqlite3.DatabaseError as exc:
-            raise PermissionError(f"Security Guardrail: Query rejected by SQLite security authorizer: {exc}") from exc
         except sqlite3.OperationalError as exc:
             if "interrupted" in str(exc).lower():
                 raise TimeoutError(f"Security Guardrail: SQL query exceeded {timeout_seconds}s timeout limit.") from exc
+            raise
+        except sqlite3.DatabaseError as exc:
+            err_msg = str(exc).lower()
+            if "not authorized" in err_msg or "prohibited" in err_msg:
+                raise PermissionError(f"Security Guardrail: Query rejected by SQLite security authorizer: {exc}") from exc
             raise
         finally:
             self.conn.set_authorizer(lambda *_args: sqlite3.SQLITE_OK)

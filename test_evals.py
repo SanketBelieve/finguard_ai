@@ -883,10 +883,15 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
 
 
 def test_day7_documentation_and_adr_completeness() -> None:
-    readme_path = Path("README.md")
-    decisions_path = Path("decisions.md")
-    assert readme_path.exists(), "README.md does not exist"
-    assert decisions_path.exists(), "decisions.md does not exist"
+    repo_root = (
+        Path(__file__).resolve().parent
+        if Path(__file__).resolve().parent.name != "app"
+        else Path(__file__).resolve().parent.parent
+    )
+    readme_path = repo_root / "README.md"
+    decisions_path = repo_root / "decisions.md"
+    assert readme_path.exists(), f"README.md does not exist at {readme_path}"
+    assert decisions_path.exists(), f"decisions.md does not exist at {decisions_path}"
 
     readme_text = readme_path.read_text(encoding="utf-8")
     assert "```mermaid" in readme_text
@@ -899,7 +904,7 @@ def test_day7_documentation_and_adr_completeness() -> None:
 
 def test_phase2_mcp_server_tools_and_sql_audit() -> None:
     """Verifies Phase 2 MCP Server tool discovery, customer velocity SQL query, and DDL blocking."""
-    store = ComplianceSQLStore()
+    store = ComplianceSQLStore(db_path=":memory:")
     mcp = FinGuardMCPServer(sql_store=store)
 
     tools = mcp.list_tools()
@@ -922,7 +927,7 @@ def test_phase2_mcp_server_tools_and_sql_audit() -> None:
 
 def test_phase2_langgraph_4node_workflow_and_hitl_checkpoint() -> None:
     """Verifies 4-Node Stateful Agent Graph traversal, SQLite checkpoint pause, and human resume."""
-    engine = FinGuardTriageEngine()
+    engine = FinGuardTriageEngine(db_path=":memory:")
     graph = FinGuardStatefulAgentGraph(triage_engine=engine)
 
     # Run a shared-OTP negligence case (EVAL-22) which must pause at AWAITING_HUMAN_APPROVAL
@@ -950,7 +955,7 @@ def test_phase2_langgraph_4node_workflow_and_hitl_checkpoint() -> None:
                 reviewer_notes="Excessive liability should be blocked.",
             ),
         )
-        assert False, "Expected ValueError for excessive override_liability_inr"
+        raise AssertionError("Expected ValueError for excessive override_liability_inr")
     except ValueError:
         pass
 
@@ -984,10 +989,10 @@ def test_pydantic_coerces_formatted_inr_strings() -> None:
 
 
 def test_sql_guardrail_blocks_destructive_queries() -> None:
-    store = ComplianceSQLStore()
+    store = ComplianceSQLStore(db_path=":memory:")
     try:
         store.execute_safe_readonly_sql("DROP TABLE dispute_triage_audit")
-        assert False, "Expected PermissionError for DROP TABLE"
+        raise AssertionError("Expected PermissionError for DROP TABLE")
     except PermissionError:
         pass
 

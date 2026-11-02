@@ -209,7 +209,7 @@ class FinGuardTriageEngine:
 
     def __init__(
         self,
-        db_path: str = ":memory:",
+        db_path: Optional[str] = None,
         pdf_dir: str = "rbi_circulars",
         vector_backend: str = "sqlite_vec",
         llm_client: Optional[Any] = None,

@@ -16,12 +16,14 @@ Launch server:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, AsyncGenerator, Deque, Dict, List, Tuple
+from typing import Any, AsyncGenerator, Deque, Dict, List, Optional, Tuple
 
 try:
     from engine import (
@@ -72,14 +74,29 @@ class SlidingWindowRateLimiter:
     and returns `(allowed, remaining, retry_after_seconds)`.
     """
 
-    def __init__(self, max_requests: int = 30, window_seconds: float = 60.0) -> None:
+    def __init__(
+        self,
+        max_requests: int = 30,
+        window_seconds: float = 60.0,
+        max_tracked_clients: int = 10_000,
+    ) -> None:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.max_tracked_clients = max_tracked_clients
         self._buckets: Dict[str, Deque[float]] = {}
 
     def check_request(self, client_key: str, now: float | None = None) -> Tuple[bool, int, int]:
         current_time = now if now is not None else time.monotonic()
         cutoff = current_time - self.window_seconds
+
+        # Enforce strict memory ceiling to prevent unbounded caller-controlled bucket creation
+        if len(self._buckets) >= self.max_tracked_clients and client_key not in self._buckets:
+            expired_keys = [k for k, b in self._buckets.items() if not b or b[-1] <= cutoff]
+            for k in expired_keys:
+                del self._buckets[k]
+            if len(self._buckets) >= self.max_tracked_clients:
+                oldest_k = next(iter(self._buckets))
+                del self._buckets[oldest_k]
 
         bucket = self._buckets.setdefault(client_key, deque())
         while bucket and bucket[0] <= cutoff:
@@ -319,39 +336,45 @@ if FASTAPI_AVAILABLE:
         allow_headers=["*"],
     )
 
-    def _extract_client_key(request: Request) -> str:
+    def _extract_api_key(request: Request) -> Optional[str]:
         api_key = request.headers.get("X-API-Key")
+        if not api_key:
+            auth_header = request.headers.get("Authorization")
+            if auth_header:
+                if auth_header.lower().startswith("bearer "):
+                    api_key = auth_header[7:].strip()
+                else:
+                    api_key = auth_header.strip()
+        return api_key
+
+    def _extract_client_key(request: Request, verified_principal: Optional[str] = None) -> str:
+        """Derives a bounded rate-limiting bucket key by verified principal or client IP."""
+        if verified_principal:
+            return f"principal:{hashlib.sha256(verified_principal.encode()).hexdigest()[:16]}"
+        api_key = _extract_api_key(request)
         if api_key:
-            return f"key:{api_key}"
+            return f"key:{hashlib.sha256(api_key.encode()).hexdigest()[:16]}"
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
-            return f"ip:{forwarded.split(',')[0].strip()}"
+            ip = forwarded.split(",")[0].strip()
+            return f"ip:{ip[:45]}"
         client_host = request.client.host if request.client else "127.0.0.1"
         return f"ip:{client_host}"
 
     def _authenticate_request(request: Request) -> str:
-        """Validates API authentication via X-API-Key or Authorization header."""
-        api_key = request.headers.get("X-API-Key")
-        auth_header = request.headers.get("Authorization")
-        if not api_key and auth_header:
-            if auth_header.lower().startswith("bearer "):
-                api_key = auth_header[7:].strip()
-            else:
-                api_key = auth_header.strip()
-
+        """Validates API authentication; fails closed (503) if unconfigured and uses constant-time compare."""
         expected_key = os.getenv("FINGUARD_API_KEY")
-        if expected_key:
-            if not api_key or api_key != expected_key:
-                raise HTTPException(status_code=401, detail="Invalid or missing API key.")
-        elif not api_key and not auth_header:
-            officer_id = request.headers.get("X-Compliance-Officer-ID") or request.headers.get("X-Officer-ID")
-            if officer_id:
-                return officer_id
+        if not expected_key:
             raise HTTPException(
-                status_code=401,
-                detail="Authentication required: provide X-API-Key or Authorization header.",
+                status_code=503,
+                detail="Service Unavailable: API authentication is not configured.",
             )
-        return api_key or "authenticated_client"
+
+        api_key = _extract_api_key(request)
+        if not api_key or not hmac.compare_digest(api_key, expected_key):
+            raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
+        return f"principal:{hashlib.sha256(api_key.encode()).hexdigest()[:12]}"
 
     @app.post("/v1/disputes/triage", response_model=TriageVerdict)
     async def triage_dispute_endpoint(
@@ -409,32 +432,21 @@ if FASTAPI_AVAILABLE:
         response: Response,
     ) -> Any:
         """Resumes a paused `AWAITING_HUMAN_APPROVAL` thread with an authenticated compliance officer decision."""
-        officer_principal = (
-            request.headers.get("X-Compliance-Officer-ID")
-            or request.headers.get("X-Officer-ID")
-            or request.headers.get("X-Reviewer-ID")
-        )
-        api_key = request.headers.get("X-API-Key")
-        auth_header = request.headers.get("Authorization")
-        if not api_key and auth_header:
-            if auth_header.lower().startswith("bearer "):
-                api_key = auth_header[7:].strip()
-            else:
-                api_key = auth_header.strip()
-
         expected_key = os.getenv("FINGUARD_COMPLIANCE_KEY") or os.getenv("FINGUARD_API_KEY")
-        if expected_key:
-            if not api_key or api_key != expected_key:
-                raise HTTPException(status_code=401, detail="Invalid or missing compliance officer authorization.")
-        elif not officer_principal and not api_key:
+        if not expected_key:
             raise HTTPException(
-                status_code=401,
-                detail="Compliance officer authorization required: provide X-Compliance-Officer-ID or X-API-Key header.",
+                status_code=503,
+                detail="Service Unavailable: Compliance officer authentication is not configured.",
             )
 
-        authenticated_reviewer = officer_principal or (f"API-KEY:{api_key}" if api_key else None)
+        api_key = _extract_api_key(request)
+        if not api_key or not hmac.compare_digest(api_key, expected_key):
+            raise HTTPException(status_code=401, detail="Invalid or missing compliance officer authorization.")
 
-        client_key = _extract_client_key(request)
+        # Derive reviewer identity from verified principal to prevent spoofing and avoid raw secret leakage
+        verified_reviewer = f"OFFICER-{hashlib.sha256(api_key.encode()).hexdigest()[:8].upper()}"
+
+        client_key = _extract_client_key(request, verified_principal=verified_reviewer)
         allowed, remaining, retry_after = rate_limiter.check_request(client_key)
         response.headers["X-RateLimit-Limit"] = str(rate_limiter.max_requests)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
@@ -458,7 +470,7 @@ if FASTAPI_AVAILABLE:
             return agent_graph.resume_paused_thread(
                 thread_id=thread_id,
                 review=review,
-                authenticated_reviewer_id=authenticated_reviewer,
+                authenticated_reviewer_id=verified_reviewer,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -475,9 +487,9 @@ if FASTAPI_AVAILABLE:
         payload: MCPToolCallRequest, request: Request, response: Response
     ) -> Any:
         """Executes a read-only MCP SQL tool with authentication and sliding-window rate limiting."""
-        _authenticate_request(request)
+        verified_principal = _authenticate_request(request)
 
-        client_key = _extract_client_key(request)
+        client_key = _extract_client_key(request, verified_principal=verified_principal)
         allowed, remaining, retry_after = rate_limiter.check_request(client_key)
         response.headers["X-RateLimit-Limit"] = str(rate_limiter.max_requests)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
