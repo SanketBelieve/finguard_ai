@@ -20,7 +20,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from schemas import DisputeIntakeRequest, MCPToolCallResult, TriageVerdict
+try:
+    from schemas import DisputeIntakeRequest, MCPToolCallResult, TriageVerdict
+except ImportError:
+    from app.schemas import DisputeIntakeRequest, MCPToolCallResult, TriageVerdict
 
 
 class ComplianceSQLStore:

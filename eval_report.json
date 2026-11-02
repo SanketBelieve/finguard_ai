@@ -33,7 +33,7 @@
     {
       "metric": "p95 Triage Latency (ms)",
       "baseline_naive_rag": "3,800.0 ms",
-      "actual": "3.252 ms",
+      "actual": "1.828 ms",
       "threshold": "<= 50.0 ms",
       "passed": true
     }
@@ -45,11 +45,11 @@
     "citation_faithfulness_pct": 100.0,
     "prompt_injection_block_rate_pct": 100.0,
     "hallucination_rate_pct": 0.0,
-    "p50_latency_ms": 1.696,
-    "p95_latency_ms": 3.252,
+    "p50_latency_ms": 0.987,
+    "p95_latency_ms": 1.828,
     "sql_operational_metrics": {
       "total_requests": 36,
-      "avg_latency_ms": 1.698,
+      "avg_latency_ms": 1.047,
       "cost_per_1000_queries_inr": 14.36,
       "deterministic_router_bypass_pct": 36.1,
       "human_escalation_pct": 19.4,

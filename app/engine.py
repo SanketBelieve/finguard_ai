@@ -15,14 +15,10 @@ import os
 import time
 from typing import  Any, Dict, List, Literal, Optional, Protocol, Sequence, Tuple
 from typing_extensions import Literal
-from database import ComplianceSQLStore, FinGuardMCPServer
 try:
-    from database import ComplianceSQLStore
+    from database import ComplianceSQLStore, FinGuardMCPServer
 except ImportError:
-    try:
-        from app.database import ComplianceSQLStore
-    except ImportError:
-        from database import ComplianceSQLStore
+    from app.database import ComplianceSQLStore, FinGuardMCPServer
 from retriever import HybridComplianceRetriever
 from router import DeterministicFinTechRouter
 from schemas import (
@@ -167,6 +163,9 @@ class StructuredLLMSynthesizer:
                 raw_result = self.structured_runnable.invoke(prompt)
                 if isinstance(raw_result, LLMSynthesisDraft):
                     draft = raw_result
+                elif getattr(raw_result, "__class__", None) and raw_result.__class__.__name__ == "LLMSynthesisDraft":
+                    raw_result_data = raw_result.model_dump() if hasattr(raw_result, "model_dump") else raw_result.dict()
+                    draft = LLMSynthesisDraft(**raw_result_data)
                 elif isinstance(raw_result, dict):
                     draft = LLMSynthesisDraft(**raw_result)
                 else:
@@ -198,12 +197,14 @@ class FinGuardTriageEngine:
         vector_backend: str = "sqlite_vec",
         llm_client: Optional[Any] = None,
         llm_provider_name: Optional[str] = None,
+        mcp_server: Optional[FinGuardMCPServer] = None,
     ) -> None:
         self.retriever = HybridComplianceRetriever(
             pdf_dir=pdf_dir,
             vector_backend=vector_backend,
         )
         self.sql_store = ComplianceSQLStore(db_path=db_path)
+        self.mcp_server = mcp_server or FinGuardMCPServer(sql_store=self.sql_store)
         self.llm_synthesizer = StructuredLLMSynthesizer(
             llm_client=llm_client,
             provider_name=llm_provider_name,
@@ -486,8 +487,8 @@ class FinGuardStatefulAgentGraph:
 
     def __init__(self, triage_engine: FinGuardTriageEngine) -> None:
         self.engine = triage_engine
-        self.mcp = triage_engine.mcp_server
         self.sql_store = triage_engine.sql_store
+        self.mcp = getattr(triage_engine, "mcp_server", None) or FinGuardMCPServer(sql_store=self.sql_store)
 
     @staticmethod
     def _make_thread_id(req: DisputeIntakeRequest) -> str:
@@ -567,15 +568,27 @@ class FinGuardStatefulAgentGraph:
             "AWAITING_HUMAN_APPROVAL" if requires_human_approval else "COMPLETED"
         )
 
+        converted_verdict = (
+            verdict
+            if isinstance(verdict, TriageVerdict)
+            else TriageVerdict(**(verdict.model_dump() if hasattr(verdict, "model_dump") else verdict.dict()))
+        )
+        converted_mcp_calls = [
+            c
+            if isinstance(c, MCPToolCallResult)
+            else MCPToolCallResult(**(c.model_dump() if hasattr(c, "model_dump") else c.dict()))
+            for c in mcp_calls
+        ]
+
         total_ms = round((time.perf_counter() - t0) * 1000, 3)
         result = AgentWorkflowResult(
             thread_id=tid,
             workflow_status=status,
             node_trace=node_trace,
-            mcp_tool_calls=mcp_calls,
+            mcp_tool_calls=converted_mcp_calls,
             customer_velocity_risk=velocity_risk,
             prior_disputes_90d=prior_disputes,
-            verdict=verdict,
+            verdict=converted_verdict,
             total_workflow_ms=total_ms,
         )
 

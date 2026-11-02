@@ -23,9 +23,17 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
+
+_here = Path(__file__).resolve().parent
+_app_dir = _here if _here.name == "app" else _here / "app"
+if _app_dir.is_dir() and str(_app_dir) not in sys.path:
+    sys.path.insert(0, str(_app_dir))
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
 
 from database import ComplianceSQLStore, FinGuardMCPServer
 from engine import FinGuardStatefulAgentGraph, FinGuardTriageEngine
