@@ -1,26 +1,17 @@
 """
-ci_eval_gate.py — Day 5-7 GitHub Actions CI/CD Quality Gate & PR Scorecard Runner
-=================================================================================
+ci_eval_gate.py — Phase 1 & 2 GitHub Actions CI/CD Quality Gate & PR Scorecard
+==============================================================================
 Enforces automated regression thresholds on every `git push` and `pull_request`
 for FinGuard AI:
-  1. Executes all 10 unit, PDF (`pdfplumber`), LLM structured output, timeout
+  1. Executes all 12 unit, PDF (`pdfplumber`), LLM structured output, timeout
      fallback, prompt-injection security, sliding-window rate limiter, Docker
-     manifest, ADR documentation, and SQL guardrail tests.
+     manifest, ADR documentation, Phase 2 MCP SQL Server, and 4-Node LangGraph
+     HITL checkpoint tests.
   2. Runs the 36-case Golden Dataset Evaluation Suite and checks strict
-     production thresholds:
-       - Verdict Accuracy          >= 98.0% (Baseline naive RAG: 76.0%)
-       - PDF Citation Faithfulness >= 98.0% (Baseline naive RAG: 72.0%)
-       - Prompt Injection Blocking == 100.0%
-       - Hallucination Rate        <= 2.0%  (Baseline naive RAG: 23.0%)
-       - p95 Latency               <= 50.0 ms
+     production thresholds.
   3. Generates a Markdown Pull Request Scorecard (`eval_report.md` and
      `$GITHUB_STEP_SUMMARY`) plus `.github/workflows/ci-eval.yml`,
      `requirements.txt`, `Dockerfile`, and `docker-compose.yml`.
-
-Usage:
-    python3 ci_eval_gate.py
-    python3 ci_eval_gate.py --generate-workflow
-    python3 ci_eval_gate.py --min-accuracy 100 --max-hallucination 0
 """
 
 from __future__ import annotations
@@ -33,49 +24,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-_here = Path(__file__).resolve().parent
-_app_dir = _here if _here.name == "app" else _here / "app"
-if _app_dir.is_dir() and str(_app_dir) not in sys.path:
-    sys.path.insert(0, str(_app_dir))
-if str(_here) not in sys.path:
-    sys.path.insert(0, str(_here))
-
-try:
-    from app.main import generate_container_manifests
-except ImportError:
-    from main import generate_container_manifests
-
-try:
-    from app.test_evals import (
-        run_evaluation_suite,
-        test_adversarial_prompt_injection_is_blocked_without_leak,
-        test_day3_llm_timeout_triggers_deterministic_fallback,
-        test_day3_structured_llm_synthesis_happy_path,
-        test_day6_docker_and_compose_manifests_valid,
-        test_day6_sliding_window_rate_limiter_enforces_quota,
-        test_day7_documentation_and_adr_completeness,
-        test_eval_suite_passes_quality_gates,
-        test_pdfplumber_ingests_and_indexes_real_pdfs,
-        test_pydantic_coerces_formatted_inr_strings,
-        test_sql_guardrail_blocks_destructive_queries,
-    )
-except ImportError:
-    from test_evals import (
-        run_evaluation_suite,
-        test_adversarial_prompt_injection_is_blocked_without_leak,
-        test_day3_llm_timeout_triggers_deterministic_fallback,
-        test_day3_structured_llm_synthesis_happy_path,
-        test_day6_docker_and_compose_manifests_valid,
-        test_day6_sliding_window_rate_limiter_enforces_quota,
-        test_day7_documentation_and_adr_completeness,
-        test_eval_suite_passes_quality_gates,
-        test_pdfplumber_ingests_and_indexes_real_pdfs,
-        test_pydantic_coerces_formatted_inr_strings,
-        test_sql_guardrail_blocks_destructive_queries,
-    )
+from main import generate_container_manifests
+from test_evals import (
+    run_evaluation_suite,
+    test_adversarial_prompt_injection_is_blocked_without_leak,
+    test_day3_llm_timeout_triggers_deterministic_fallback,
+    test_day3_structured_llm_synthesis_happy_path,
+    test_day6_docker_and_compose_manifests_valid,
+    test_day6_sliding_window_rate_limiter_enforces_quota,
+    test_day7_documentation_and_adr_completeness,
+    test_eval_suite_passes_quality_gates,
+    test_pdfplumber_ingests_and_indexes_real_pdfs,
+    test_phase2_langgraph_4node_workflow_and_hitl_checkpoint,
+    test_phase2_mcp_server_tools_and_sql_audit,
+    test_pydantic_coerces_formatted_inr_strings,
+    test_sql_guardrail_blocks_destructive_queries,
+)
 
 
-GITHUB_ACTIONS_WORKFLOW_YAML = """name: FinGuard AI — CI/CD RAG & Security Quality Gate
+GITHUB_ACTIONS_WORKFLOW_YAML = """name: FinGuard AI — CI/CD RAG, MCP & Agent Security Quality Gate
 
 on:
   push:
@@ -86,7 +53,7 @@ on:
 
 jobs:
   rag-and-security-quality-gate:
-    name: Run Unit Tests, SQL Guardrails & 36-Case Golden Eval Gate
+    name: Run 12 Test Suites, MCP Guardrails & 36-Case Golden Eval Gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -105,13 +72,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pytest Unit, PDF, LLM Fallback, Rate-Limit & Security Suite
+      - name: Run Pytest Unit, PDF, LLM, MCP, LangGraph & Security Suite
         run: |
-          PYTHONPATH=.:app pytest test_evals.py -v
+          PYTHONPATH=. pytest test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
-          PYTHONPATH=.:app python3 ci_eval_gate.py \\
+          PYTHONPATH=. python3 ci_eval_gate.py \\
             --min-accuracy 98.0 \\
             --min-faithfulness 98.0 \\
             --min-injection-block 100.0 \\
@@ -138,7 +105,9 @@ pdfplumber>=0.11.0
 reportlab>=4.0.0
 numpy>=1.24.0
 pytest>=8.0.0
-# Optional production vector, rate-limiting & LLM integrations:
+# Optional production vector, MCP, LangGraph & LLM integrations:
+# mcp>=1.0.0
+# langgraph>=0.2.0
 # slowapi>=0.1.9
 # chromadb>=0.5.0
 # psycopg2-binary>=2.9.9
@@ -150,7 +119,6 @@ pytest>=8.0.0
 
 
 def generate_ci_files(base_dir: str | Path = ".") -> Tuple[Path, Path]:
-    """Writes `.github/workflows/ci-eval.yml`, `requirements.txt`, and Docker manifests."""
     root = Path(base_dir)
     workflow_dir = root / ".github" / "workflows"
     workflow_dir.mkdir(parents=True, exist_ok=True)
@@ -166,7 +134,7 @@ def generate_ci_files(base_dir: str | Path = ".") -> Tuple[Path, Path]:
 
 
 def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
-    """Executes all 10 deterministic unit, PDF, LLM, rate-limiter, Docker, ADR, and security tests."""
+    """Executes all 12 deterministic unit, PDF, LLM, rate-limiter, Docker, ADR, MCP, and LangGraph tests."""
     checks = [
         ("PDF Extraction & Vector Indexing (`pdfplumber`)", test_pdfplumber_ingests_and_indexes_real_pdfs),
         ("Structured LLM Output Happy Path (`.with_structured_output`)", test_day3_structured_llm_synthesis_happy_path),
@@ -175,6 +143,8 @@ def run_unit_and_security_tests() -> List[Tuple[str, bool, str]]:
         ("Sliding-Window API Rate Limiter (HTTP 429 Quota)", test_day6_sliding_window_rate_limiter_enforces_quota),
         ("Multi-Stage Dockerfile & Compose Security Manifests", test_day6_docker_and_compose_manifests_valid),
         ("Architecture Decision Records (`README.md` & `DECISIONS.md`)", test_day7_documentation_and_adr_completeness),
+        ("Phase 2 MCP SQL Server Tools & DDL Injection Block", test_phase2_mcp_server_tools_and_sql_audit),
+        ("Phase 2 4-Node LangGraph Workflow & HITL Checkpoint Resume", test_phase2_langgraph_4node_workflow_and_hitl_checkpoint),
         ("Pydantic Currency Coercion & Schema Validation", test_pydantic_coerces_formatted_inr_strings),
         ("Read-Only SQL Sanitizer (`DROP TABLE` Blocked)", test_sql_guardrail_blocks_destructive_queries),
         ("36-Case Golden Dataset Quality Gate Assertions", test_eval_suite_passes_quality_gates),
@@ -197,7 +167,7 @@ def evaluate_quality_gates(
     max_hallucination: float = 2.0,
     max_p95_ms: float = 50.0,
 ) -> List[Dict[str, Any]]:
-    gates = [
+    return [
         {
             "metric": "Verdict Accuracy (%)",
             "baseline_naive_rag": "76.0%",
@@ -234,7 +204,6 @@ def evaluate_quality_gates(
             "passed": summary["p95_latency_ms"] <= max_p95_ms,
         },
     ]
-    return gates
 
 
 def build_markdown_scorecard(
@@ -269,7 +238,7 @@ def build_markdown_scorecard(
     lines.extend(
         [
             "",
-            "## 2. Automated Unit, PDF, LLM Fallback, Rate-Limit, Docker & ADR Checks",
+            "## 2. Automated Phase 1 & Phase 2 Checks (12 Suites)",
             "",
             "| Check Name | Status |",
             "| :--- | :--- |",
@@ -327,7 +296,7 @@ def main(argv: List[str] | None = None) -> int:
     Path(args.export_json).write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
     print("=" * 100)
-    print("DAY 7 FINGUARD AI — FULL WEEK 1 CI/CD QUALITY GATE & DOCUMENTATION VERIFICATION")
+    print("PHASE 2 FINGUARD AI — CI/CD QUALITY GATE, MCP SERVER & 4-NODE LANGGRAPH VERIFICATION")
     print("=" * 100)
     for g in gates:
         badge = "PASS" if g["passed"] else "FAIL"
@@ -344,7 +313,7 @@ def main(argv: List[str] | None = None) -> int:
         print("CI/CD QUALITY GATE FAILED: Blocking Pull Request Merge.", file=sys.stderr)
         return 1
 
-    print("CI/CD QUALITY GATE PASSED: All 10 test suites & 5 regression gates green.")
+    print("CI/CD QUALITY GATE PASSED: All 12 test suites & 5 regression gates green.")
     return 0
 
 

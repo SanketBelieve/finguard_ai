@@ -149,3 +149,52 @@ class TriageVerdict(BaseModel):
             if cat != DisputeCategory.OUT_OF_SCOPE_QUERY and route != "GUARDRAIL_FALLBACK" and len(cits) == 0:
                 raise ValueError("Compliance verdicts must include at least one verified RBI citation.")
             return values
+        
+
+
+# ============================================================================
+# PHASE 2 SCHEMAS: MODEL CONTEXT PROTOCOL (MCP) & LANGGRAPH STATEFUL AGENT
+# ============================================================================
+
+class MCPToolCallRequest(BaseModel):
+    """Inbound request to invoke a registered MCP SQL tool."""
+
+    tool_name: Literal[
+        "inspect_audit_schema",
+        "get_customer_dispute_history",
+        "query_readonly_compliance_sql",
+    ]
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MCPToolCallResult(BaseModel):
+    """Structured result returned by the FinGuard MCP SQL Server."""
+
+    tool_name: str
+    status: Literal["SUCCESS", "BLOCKED_BY_GUARDRAIL", "ERROR"]
+    data: Any = None
+    error_message: Optional[str] = None
+    execution_ms: float = Field(..., ge=0.0)
+
+
+class HumanReviewDecisionRequest(BaseModel):
+    """Payload submitted by a human compliance officer to resume a paused LangGraph thread."""
+
+    reviewer_id: str = Field(..., min_length=3, max_length=64, description="Compliance officer ID")
+    decision: Literal["APPROVE_SHADOW_CREDIT", "REJECT_HOLD_CUSTOMER_LIABLE"]
+    override_liability_inr: Optional[float] = Field(default=None, ge=0.0)
+    reviewer_notes: str = Field(..., min_length=5, max_length=500)
+
+
+class AgentWorkflowResult(BaseModel):
+    """Complete execution trace and state checkpoint of the 4-Node LangGraph workflow."""
+
+    thread_id: str
+    workflow_status: Literal["COMPLETED", "AWAITING_HUMAN_APPROVAL", "REJECTED_BY_GUARDRAIL"]
+    node_trace: List[str] = Field(default_factory=list, description="Ordered list of visited graph nodes")
+    mcp_tool_calls: List[MCPToolCallResult] = Field(default_factory=list)
+    customer_velocity_risk: Literal["LOW", "MEDIUM", "HIGH_VELOCITY_ABUSE"] = "LOW"
+    prior_disputes_90d: int = 0
+    verdict: TriageVerdict
+    human_review_notes: Optional[str] = None
+    total_workflow_ms: float = Field(..., ge=0.0)
