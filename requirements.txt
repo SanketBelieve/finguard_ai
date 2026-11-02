@@ -5,7 +5,10 @@ pdfplumber>=0.11.0
 reportlab>=4.0.0
 numpy>=1.24.0
 pytest>=8.0.0
-# Optional production vector & LLM integrations:
+# Optional production vector, MCP, LangGraph & LLM integrations:
+# mcp>=1.0.0
+# langgraph>=0.2.0
+# slowapi>=0.1.9
 # chromadb>=0.5.0
 # psycopg2-binary>=2.9.9
 # langchain-openai>=0.1.0

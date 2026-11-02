@@ -11,7 +11,10 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from schemas import DisputeCategory, DisputeIntakeRequest, PaymentRail
+try:
+    from schemas import DisputeCategory, DisputeIntakeRequest, PaymentRail
+except ImportError:
+    from app.schemas import DisputeCategory, DisputeIntakeRequest, PaymentRail
 
 
 class DeterministicFinTechRouter:

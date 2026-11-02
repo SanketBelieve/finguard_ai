@@ -1,17 +1,16 @@
 """
-test_evals.py — 36-Case Golden Dataset & Day 1–7 Production Readiness Tests
-===========================================================================
+test_evals.py — 36-Case Golden Dataset & Phase 1–2 Production Readiness Tests
+=============================================================================
 Comprehensive evaluation suite for FinGuard AI covering:
-  - 6 UPI failed debit variants (TAT T+1)
-  - 5 IMPS, NEFT, and RTGS transfer failures (TAT T+1)
-  - 5 Unauthorized fraud cases <=72h (Zero Liability across all rails)
-  - 5 Unauthorized fraud cases 4–7 days (Limited Liability: ₹10k savings / ₹25k card)
-  - 4 Customer negligence cases (Shared OTP, PIN, CVV)
-  - 3 Delayed reporting cases >7 days / >168 hours (Human escalation)
-  - 3 Duplicate debits and commercial chargeback disputes
-  - 5 Adversarial prompt injection, jailbreak & exfiltration attacks
-  - Day 6 Sliding-Window Rate Limiter & Multi-Stage Docker Manifest Verification
-  - Day 7 README.md & DECISIONS.md (ADR-001..ADR-007) Completeness Check
+  - 36 Golden Dataset RBI Compliance & Adversarial Cases
+  - Phase 1 Tests (PDF `pdfplumber`, `.with_structured_output` LLM, Timeout
+    Fallback, Prompt-Injection Guardrail, Rate Limiter, Docker, ADRs)
+  - Phase 2 Tests:
+      * Test Suite #11: `FinGuardMCPServer` tool discovery, customer velocity
+        SQL lookup, read-only SQL guardrail blocking `DROP TABLE`, and MCP audit logs
+      * Test Suite #12: `FinGuardStatefulAgentGraph` 4-node traversal, velocity
+        abuse escalation, SQLite thread checkpointing at `AWAITING_HUMAN_APPROVAL`,
+        and human-in-the-loop thread resumption
 
 Run standalone benchmark:
     python3 test_evals.py
@@ -36,8 +35,8 @@ if _app_dir.is_dir() and str(_app_dir) not in sys.path:
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
-from database import ComplianceSQLStore
-from engine import FinGuardTriageEngine
+from database import ComplianceSQLStore, FinGuardMCPServer
+from engine import FinGuardStatefulAgentGraph, FinGuardTriageEngine
 from main import SlidingWindowRateLimiter, validate_container_manifests
 from retriever import RBIPDFChunker, RegulatoryVectorStore
 from router import DeterministicFinTechRouter
@@ -45,6 +44,7 @@ from schemas import (
     DisputeCategory,
     DisputeIntakeRequest,
     EscalationAction,
+    HumanReviewDecisionRequest,
     LLMSynthesisDraft,
     PaymentRail,
 )
@@ -883,17 +883,97 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
 
 
 def test_day7_documentation_and_adr_completeness() -> None:
-    """Verifies README.md (Mermaid diagram + benchmarks) and decisions.md (ADR-001..ADR-007)."""
-    readme_path = Path("README.md") if Path("README.md").exists() else Path(__file__).resolve().parent / "README.md"
-    decisions_path = Path("decisions.md") if Path("decisions.md").exists() else Path(__file__).resolve().parent / "decisions.md"
-    assert readme_path.exists(), "README.md does not exist"
-    assert decisions_path.exists(), "decisions.md does not exist"
+    repo_root = (
+        Path(__file__).resolve().parent
+        if Path(__file__).resolve().parent.name != "app"
+        else Path(__file__).resolve().parent.parent
+    )
+    readme_path = repo_root / "README.md"
+    decisions_path = repo_root / "decisions.md"
+    assert readme_path.exists(), f"README.md does not exist at {readme_path}"
+    assert decisions_path.exists(), f"decisions.md does not exist at {decisions_path}"
+
     readme_text = readme_path.read_text(encoding="utf-8")
     assert "```mermaid" in readme_text
     assert "INR 14.36" in readme_text
+
     decisions_text = decisions_path.read_text(encoding="utf-8")
     for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
         assert adr_id in decisions_text, f"Missing {adr_id} in decisions.md"
+
+
+def test_phase2_mcp_server_tools_and_sql_audit() -> None:
+    """Verifies Phase 2 MCP Server tool discovery, customer velocity SQL query, and DDL blocking."""
+    store = ComplianceSQLStore(db_path=":memory:")
+    mcp = FinGuardMCPServer(sql_store=store)
+
+    tools = mcp.list_tools()
+    assert len(tools) == 3
+
+    schema_res = mcp.call_tool("inspect_audit_schema")
+    assert schema_res.status == "SUCCESS"
+    assert "dispute_triage_audit" in schema_res.data["tables"]
+
+    hist_res = mcp.call_tool("get_customer_dispute_history", {"customer_id": "CUST-5555"})
+    assert hist_res.status == "SUCCESS"
+    assert hist_res.data["velocity_risk_tier"] == "LOW"
+
+    blocked_res = mcp.call_tool(
+        "query_readonly_compliance_sql",
+        {"sql_query": "DROP TABLE dispute_triage_audit"},
+    )
+    assert blocked_res.status == "BLOCKED_BY_GUARDRAIL"
+
+
+def test_phase2_langgraph_4node_workflow_and_hitl_checkpoint() -> None:
+    """Verifies 4-Node Stateful Agent Graph traversal, SQLite checkpoint pause, and human resume."""
+    engine = FinGuardTriageEngine(db_path=":memory:")
+    graph = FinGuardStatefulAgentGraph(triage_engine=engine)
+
+    # Run a shared-OTP negligence case (EVAL-22) which must pause at AWAITING_HUMAN_APPROVAL
+    req = GOLDEN_EVAL_DATASET[21].request
+    wf_result = graph.run_workflow(req, thread_id="FG-THREAD-TEST01")
+
+    assert wf_result.workflow_status == "AWAITING_HUMAN_APPROVAL"
+    assert wf_result.node_trace == [
+        "planner_node",
+        "mcp_sql_researcher_node",
+        "rbi_rag_verifier_node",
+        "human_in_the_loop_gate_node",
+    ]
+    assert len(wf_result.mcp_tool_calls) == 1
+    assert wf_result.mcp_tool_calls[0].tool_name == "get_customer_dispute_history"
+
+    # Verify that an excessive override liability (> transaction amount) is rejected
+    try:
+        graph.resume_paused_thread(
+            thread_id="FG-THREAD-TEST01",
+            review=HumanReviewDecisionRequest(
+                reviewer_id="OFFICER-PUNE-09",
+                decision="APPROVE_SHADOW_CREDIT",
+                override_liability_inr=999_999.0,
+                reviewer_notes="Excessive liability should be blocked.",
+            ),
+        )
+        raise AssertionError("Expected ValueError for excessive override_liability_inr")
+    except ValueError:
+        pass
+
+    # Now resume the paused thread with a valid Compliance Officer decision
+    resumed = graph.resume_paused_thread(
+        thread_id="FG-THREAD-TEST01",
+        review=HumanReviewDecisionRequest(
+            reviewer_id="OFFICER-PUNE-09",
+            decision="APPROVE_SHADOW_CREDIT",
+            override_liability_inr=0.0,
+            reviewer_notes="Verified elderly victim social engineering; goodwill shadow credit approved.",
+        ),
+    )
+    assert resumed.workflow_status == "COMPLETED"
+    assert "human_compliance_resolution_node" in resumed.node_trace
+    assert resumed.verdict.escalation_action == EscalationAction.ZERO_LIABILITY_SHADOW_CREDIT
+    assert resumed.verdict.max_customer_liability_inr == 0.0
+    assert "OFFICER-PUNE-09" in (resumed.human_review_notes or "")
 
 
 def test_pydantic_coerces_formatted_inr_strings() -> None:
@@ -909,10 +989,10 @@ def test_pydantic_coerces_formatted_inr_strings() -> None:
 
 
 def test_sql_guardrail_blocks_destructive_queries() -> None:
-    store = ComplianceSQLStore()
+    store = ComplianceSQLStore(db_path=":memory:")
     try:
         store.execute_safe_readonly_sql("DROP TABLE dispute_triage_audit")
-        assert False, "Expected PermissionError for DROP TABLE"
+        raise AssertionError("Expected PermissionError for DROP TABLE")
     except PermissionError:
         pass
 
@@ -925,15 +1005,17 @@ if __name__ == "__main__":
     test_day6_sliding_window_rate_limiter_enforces_quota()
     test_day6_docker_and_compose_manifests_valid()
     test_day7_documentation_and_adr_completeness()
+    test_phase2_mcp_server_tools_and_sql_audit()
+    test_phase2_langgraph_4node_workflow_and_hitl_checkpoint()
     test_pydantic_coerces_formatted_inr_strings()
     test_sql_guardrail_blocks_destructive_queries()
     test_eval_suite_passes_quality_gates()
 
     summary = run_evaluation_suite()
     print("=" * 100)
-    print("WEEK 1 COMPLETE (DAYS 1–7) — FINGUARD AI PRODUCTION BENCHMARK & VERIFICATION")
+    print("PHASE 2 COMPLETE — MCP SQL SERVER, 4-NODE LANGGRAPH AGENT & 36-CASE BENCHMARK")
     print("=" * 100)
-    print("All Unit, PDF, LLM, Security, Rate-Limit, Docker & ADR Tests : 10 / 10 PASSED")
+    print("All Phase 1 & Phase 2 Automated Test Suites                  : 12 / 12 PASSED")
     print(f"Total Golden Evaluation Cases                                : {summary['total_cases']} cases")
     print(f"Indexed RBI PDF Chunks                                       : {summary['indexed_pdf_chunks']} chunks across 2 multi-page PDFs")
     print(f"Verdict Accuracy                                             : {summary['verdict_accuracy_pct']}%")

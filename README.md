@@ -53,7 +53,7 @@ flowchart TD
 | `main.py` | FastAPI microservice with `SlidingWindowRateLimiter`, CORS middleware, REST & SSE streaming endpoints, `/health` & `/ready` probes, and Docker manifest generators. |
 | `test_evals.py` | 36-case Golden Evaluation Dataset across 8 FinTech dispute categories plus 10 automated unit, PDF, LLM fallback, prompt-injection, rate-limit, Docker, and ADR test suites. |
 | `ci_eval_gate.py` | CLI CI/CD regression gate runner generating `.github/workflows/ci-eval.yml`, `requirements.txt`, `Dockerfile`, `docker-compose.yml`, and PR scorecards (`eval_report.md`). |
-| `DECISIONS.md` | Architecture Decision Records (ADR-001 through ADR-007) documenting key design trade-offs. |
+| `decisions.md` | Architecture Decision Records (ADR-001 through ADR-007) documenting key design trade-offs. |
 
 ## 4. Quickstart (3 Commands)
 

@@ -10,22 +10,46 @@ deterministic fallback when API timeouts or rate limits occur.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
-from typing import Any, List, Optional, Protocol, Sequence, Tuple
+from typing import  Any, Dict, List, Literal, Optional, Protocol, Sequence, Tuple
+from typing_extensions import Literal
+try:
+    from database import ComplianceSQLStore, FinGuardMCPServer
+except ImportError:
+    from app.database import ComplianceSQLStore, FinGuardMCPServer
 
-from database import ComplianceSQLStore
-from retriever import HybridComplianceRetriever
-from router import DeterministicFinTechRouter
-from schemas import (
-    DisputeCategory,
-    DisputeIntakeRequest,
-    EscalationAction,
-    LLMSynthesisDraft,
-    PaymentRail,
-    RBIComplianceCitation,
-    TriageVerdict,
-)
+try:
+    from retriever import HybridComplianceRetriever
+    from router import DeterministicFinTechRouter
+    from schemas import (
+        AgentWorkflowResult,
+        DisputeCategory,
+        DisputeIntakeRequest,
+        EscalationAction,
+        HumanReviewDecisionRequest,
+        LLMSynthesisDraft,
+        MCPToolCallResult,
+        PaymentRail,
+        RBIComplianceCitation,
+        TriageVerdict,
+    )
+except ImportError:
+    from app.retriever import HybridComplianceRetriever
+    from app.router import DeterministicFinTechRouter
+    from app.schemas import (
+        AgentWorkflowResult,
+        DisputeCategory,
+        DisputeIntakeRequest,
+        EscalationAction,
+        HumanReviewDecisionRequest,
+        LLMSynthesisDraft,
+        MCPToolCallResult,
+        PaymentRail,
+        RBIComplianceCitation,
+        TriageVerdict,
+    )
 
 
 class StructuredRunnable(Protocol):
@@ -156,6 +180,9 @@ class StructuredLLMSynthesizer:
                 raw_result = self.structured_runnable.invoke(prompt)
                 if isinstance(raw_result, LLMSynthesisDraft):
                     draft = raw_result
+                elif getattr(raw_result, "__class__", None) and raw_result.__class__.__name__ == "LLMSynthesisDraft":
+                    raw_result_data = raw_result.model_dump() if hasattr(raw_result, "model_dump") else raw_result.dict()
+                    draft = LLMSynthesisDraft(**raw_result_data)
                 elif isinstance(raw_result, dict):
                     draft = LLMSynthesisDraft(**raw_result)
                 else:
@@ -182,17 +209,19 @@ class FinGuardTriageEngine:
 
     def __init__(
         self,
-        db_path: str = ":memory:",
+        db_path: Optional[str] = None,
         pdf_dir: str = "rbi_circulars",
         vector_backend: str = "sqlite_vec",
         llm_client: Optional[Any] = None,
         llm_provider_name: Optional[str] = None,
+        mcp_server: Optional[FinGuardMCPServer] = None,
     ) -> None:
         self.retriever = HybridComplianceRetriever(
             pdf_dir=pdf_dir,
             vector_backend=vector_backend,
         )
         self.sql_store = ComplianceSQLStore(db_path=db_path)
+        self.mcp_server = mcp_server or FinGuardMCPServer(sql_store=self.sql_store)
         self.llm_synthesizer = StructuredLLMSynthesizer(
             llm_client=llm_client,
             provider_name=llm_provider_name,
@@ -453,3 +482,188 @@ class FinGuardTriageEngine:
         )
         self.sql_store.log_verdict(req, verdict)
         return verdict
+
+
+
+# ============================================================================
+# PHASE 2: 4-NODE STATEFUL LANGGRAPH AGENT WORKFLOW WITH HITL CHECKPOINTS
+# ============================================================================
+
+class FinGuardStatefulAgentGraph:
+    """
+    4-Node Stateful Agent Workflow (LangGraph StateGraph pattern):
+      Node 1 (`planner_node`)              : Security guardrail check & tool execution plan
+      Node 2 (`mcp_sql_researcher_node`)   : Calls `FinGuardMCPServer` to inspect customer
+                                             90-day dispute velocity & abuse risk
+      Node 3 (`rbi_rag_verifier_node`)     : Retrieves RBI PDF citations & synthesizes verdict,
+                                             upgrading to human escalation if velocity risk is HIGH
+      Node 4 (`human_in_the_loop_gate_node`): Pauses high-risk / high-value fraud disputes at
+                                             `AWAITING_HUMAN_APPROVAL`, saves state checkpoint
+                                             to SQLite, and resumes upon compliance review
+    """
+
+    def __init__(self, triage_engine: FinGuardTriageEngine) -> None:
+        self.engine = triage_engine
+        self.sql_store = triage_engine.sql_store
+        self.mcp = getattr(triage_engine, "mcp_server", None) or FinGuardMCPServer(sql_store=self.sql_store)
+
+    @staticmethod
+    def _make_thread_id(req: DisputeIntakeRequest) -> str:
+        digest = hashlib.sha1(f"{req.customer_id}:{req.transaction_id}".encode("utf-8")).hexdigest()[:10]
+        return f" FG-THREAD-{digest.upper()}"
+
+    def run_workflow(
+        self, req: DisputeIntakeRequest, thread_id: Optional[str] = None
+    ) -> AgentWorkflowResult:
+        t0 = time.perf_counter()
+        tid = (thread_id or self._make_thread_id(req)).strip()
+        node_trace: List[str] = []
+        mcp_calls: List[MCPToolCallResult] = []
+
+        # --------------------------------------------------------------------
+        # Node 1: Planner & Security Guardrail Node
+        # --------------------------------------------------------------------
+        node_trace.append("planner_node")
+        fast_cat = DeterministicFinTechRouter.classify_fast(req)
+        if fast_cat == DisputeCategory.OUT_OF_SCOPE_QUERY:
+            verdict = self.engine.process_dispute(req)
+            total_ms = round((time.perf_counter() - t0) * 1000, 3)
+            result = AgentWorkflowResult(
+                thread_id=tid,
+                workflow_status="REJECTED_BY_GUARDRAIL",
+                node_trace=node_trace,
+                mcp_tool_calls=mcp_calls,
+                customer_velocity_risk="LOW",
+                prior_disputes_90d=0,
+                verdict=verdict,
+                total_workflow_ms=total_ms,
+            )
+            req_dict = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+            res_dict = result.model_dump() if hasattr(result, "model_dump") else result.dict()
+            self.sql_store.save_thread_checkpoint(tid, result.workflow_status, req_dict, res_dict)
+            return result
+
+        # --------------------------------------------------------------------
+        # Node 2: MCP SQL Researcher Node (Customer Velocity & History Lookup)
+        # --------------------------------------------------------------------
+        node_trace.append("mcp_sql_researcher_node")
+        mcp_res = self.mcp.call_tool("get_customer_dispute_history", {"customer_id": req.customer_id})
+        mcp_calls.append(mcp_res)
+
+        velocity_risk: Literal["LOW", "MEDIUM", "HIGH_VELOCITY_ABUSE"] = "LOW"
+        prior_disputes = 0
+        if mcp_res.status == "SUCCESS" and isinstance(mcp_res.data, dict):
+            velocity_risk = mcp_res.data.get("velocity_risk_tier", "LOW")
+            prior_disputes = int(mcp_res.data.get("prior_disputes_90d", 0))
+
+        # --------------------------------------------------------------------
+        # Node 3: RBI PDF Hybrid RAG Verifier & Policy Synthesis Node
+        # --------------------------------------------------------------------
+        node_trace.append("rbi_rag_verifier_node")
+        verdict = self.engine.process_dispute(req)
+
+        # If customer has HIGH_VELOCITY_ABUSE (>=3 prior disputes or >=200k INR), override to Human Escalation
+        if (
+            velocity_risk == "HIGH_VELOCITY_ABUSE"
+            and verdict.escalation_action != EscalationAction.HUMAN_COMPLIANCE_ESCALATION
+        ):
+            verdict.escalation_action = EscalationAction.HUMAN_COMPLIANCE_ESCALATION
+            verdict.rationale = (
+                f"[MCP Velocity Alert: {prior_disputes} prior disputes detected] " + verdict.rationale
+            )
+
+        # --------------------------------------------------------------------
+        # Node 4: Human-in-the-Loop (HITL) Escalation Gate & Checkpointer
+        # --------------------------------------------------------------------
+        node_trace.append("human_in_the_loop_gate_node")
+        requires_human_approval = (
+            verdict.escalation_action == EscalationAction.HUMAN_COMPLIANCE_ESCALATION
+            or (verdict.dispute_category == DisputeCategory.UNAUTHORIZED_FRAUD and req.amount_inr >= 100_000.0)
+        )
+
+        status: Literal["COMPLETED", "AWAITING_HUMAN_APPROVAL", "REJECTED_BY_GUARDRAIL"] = (
+            "AWAITING_HUMAN_APPROVAL" if requires_human_approval else "COMPLETED"
+        )
+
+        converted_verdict = (
+            verdict
+            if isinstance(verdict, TriageVerdict)
+            else TriageVerdict(**(verdict.model_dump() if hasattr(verdict, "model_dump") else verdict.dict()))
+        )
+        converted_mcp_calls = [
+            c
+            if isinstance(c, MCPToolCallResult)
+            else MCPToolCallResult(**(c.model_dump() if hasattr(c, "model_dump") else c.dict()))
+            for c in mcp_calls
+        ]
+
+        total_ms = round((time.perf_counter() - t0) * 1000, 3)
+        result = AgentWorkflowResult(
+            thread_id=tid,
+            workflow_status=status,
+            node_trace=node_trace,
+            mcp_tool_calls=converted_mcp_calls,
+            customer_velocity_risk=velocity_risk,
+            prior_disputes_90d=prior_disputes,
+            verdict=converted_verdict,
+            total_workflow_ms=total_ms,
+        )
+
+        req_dict = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+        res_dict = result.model_dump() if hasattr(result, "model_dump") else result.dict()
+        self.sql_store.save_thread_checkpoint(tid, status, req_dict, res_dict)
+        return result
+
+    def resume_paused_thread(
+        self,
+        thread_id: str,
+        review: HumanReviewDecisionRequest,
+        authenticated_reviewer_id: Optional[str] = None,
+    ) -> AgentWorkflowResult:
+        """
+        Resumes a thread paused at `AWAITING_HUMAN_APPROVAL` from its SQLite
+        checkpoint and applies the compliance officer's binding decision.
+        """
+        t0 = time.perf_counter()
+        checkpoint = self.sql_store.load_thread_checkpoint(thread_id)
+        if not checkpoint:
+            raise KeyError(f"Thread checkpoint not found: {thread_id}")
+
+        saved_state = checkpoint["state"]
+        result = AgentWorkflowResult(**saved_state)
+        if result.workflow_status != "AWAITING_HUMAN_APPROVAL":
+            raise ValueError(f"Thread {thread_id} is not awaiting approval (status={result.workflow_status})")
+
+        # Validate override_liability_inr against transaction amount from trusted checkpoint data
+        checkpoint_req = checkpoint.get("request", {})
+        tx_amount = float(checkpoint_req.get("amount_inr", 0.0))
+        if review.override_liability_inr is not None:
+            if review.override_liability_inr < 0.0 or review.override_liability_inr > tx_amount:
+                raise ValueError(
+                    f"Invalid liability override: ₹{review.override_liability_inr} must be "
+                    f"between ₹0.0 and transaction amount ₹{tx_amount}"
+                )
+
+        # Derive reviewer identity from authenticated principal rather than request's reviewer_id if provided
+        reviewer_id = authenticated_reviewer_id or review.reviewer_id
+
+        result.node_trace.append("human_compliance_resolution_node")
+        if review.decision == "APPROVE_SHADOW_CREDIT":
+            result.verdict.escalation_action = EscalationAction.ZERO_LIABILITY_SHADOW_CREDIT
+            result.verdict.max_customer_liability_inr = (
+                review.override_liability_inr if review.override_liability_inr is not None else 0.0
+            )
+        else:
+            result.verdict.escalation_action = EscalationAction.LIMITED_LIABILITY_REVIEW
+            if review.override_liability_inr is not None:
+                result.verdict.max_customer_liability_inr = review.override_liability_inr
+
+        note = f"[Reviewed by {reviewer_id}: {review.decision}] {review.reviewer_notes}"
+        result.human_review_notes = note
+        result.verdict.rationale = f"{result.verdict.rationale} | {note}"
+        result.workflow_status = "COMPLETED"
+        result.total_workflow_ms = round(result.total_workflow_ms + ((time.perf_counter() - t0) * 1000), 3)
+
+        res_dict = result.model_dump() if hasattr(result, "model_dump") else result.dict()
+        self.sql_store.save_thread_checkpoint(thread_id, "COMPLETED", checkpoint["request"], res_dict)
+        return result

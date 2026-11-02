@@ -1,4 +1,4 @@
-name: FinGuard AI — CI/CD RAG & Security Quality Gate
+name: FinGuard AI — CI/CD RAG, MCP & Agent Security Quality Gate
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   rag-and-security-quality-gate:
-    name: Run Unit Tests, SQL Guardrails & 36-Case Golden Eval Gate
+    name: Run 12 Test Suites, MCP Guardrails & 36-Case Golden Eval Gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -28,9 +28,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Pytest Unit, PDF, LLM Fallback & Security Suite
+      - name: Run Pytest Unit, PDF, LLM, MCP, LangGraph & Security Suite
         run: |
-          PYTHONPATH=.:app pytest test_evals.py -v
+          PYTHONPATH=.:app pytest app/test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
