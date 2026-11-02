@@ -28,7 +28,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pdfplumber
 
-from schemas import PaymentRail, RBIComplianceCitation
+try:
+    from schemas import PaymentRail, RBIComplianceCitation
+except ImportError:
+    from app.schemas import PaymentRail, RBIComplianceCitation
 
 
 # ============================================================================

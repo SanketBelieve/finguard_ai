@@ -23,18 +23,32 @@ from collections import deque
 from pathlib import Path
 from typing import Any, AsyncGenerator, Deque, Dict, List, Tuple
 
-from engine import (
-    FinGuardStatefulAgentGraph,
-    FinGuardTriageEngine,
-)
-from schemas import (
-    AgentWorkflowResult,
-    DisputeIntakeRequest,
-    HumanReviewDecisionRequest,
-    MCPToolCallRequest,
-    MCPToolCallResult,
-    TriageVerdict,
-)
+try:
+    from engine import (
+        FinGuardStatefulAgentGraph,
+        FinGuardTriageEngine,
+    )
+    from schemas import (
+        AgentWorkflowResult,
+        DisputeIntakeRequest,
+        HumanReviewDecisionRequest,
+        MCPToolCallRequest,
+        MCPToolCallResult,
+        TriageVerdict,
+    )
+except ImportError:
+    from app.engine import (
+        FinGuardStatefulAgentGraph,
+        FinGuardTriageEngine,
+    )
+    from app.schemas import (
+        AgentWorkflowResult,
+        DisputeIntakeRequest,
+        HumanReviewDecisionRequest,
+        MCPToolCallRequest,
+        MCPToolCallResult,
+        TriageVerdict,
+    )
 
 try:
     from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -315,6 +329,30 @@ if FASTAPI_AVAILABLE:
         client_host = request.client.host if request.client else "127.0.0.1"
         return f"ip:{client_host}"
 
+    def _authenticate_request(request: Request) -> str:
+        """Validates API authentication via X-API-Key or Authorization header."""
+        api_key = request.headers.get("X-API-Key")
+        auth_header = request.headers.get("Authorization")
+        if not api_key and auth_header:
+            if auth_header.lower().startswith("bearer "):
+                api_key = auth_header[7:].strip()
+            else:
+                api_key = auth_header.strip()
+
+        expected_key = os.getenv("FINGUARD_API_KEY")
+        if expected_key:
+            if not api_key or api_key != expected_key:
+                raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+        elif not api_key and not auth_header:
+            officer_id = request.headers.get("X-Compliance-Officer-ID") or request.headers.get("X-Officer-ID")
+            if officer_id:
+                return officer_id
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required: provide X-API-Key or Authorization header.",
+            )
+        return api_key or "authenticated_client"
+
     @app.post("/v1/disputes/triage", response_model=TriageVerdict)
     async def triage_dispute_endpoint(
         payload: DisputeIntakeRequest, request: Request, response: Response
@@ -365,11 +403,63 @@ if FASTAPI_AVAILABLE:
 
     @app.post("/v1/agents/threads/{thread_id}/resume", response_model=AgentWorkflowResult)
     async def resume_agent_thread_endpoint(
-        thread_id: str, review: HumanReviewDecisionRequest
-    ) -> AgentWorkflowResult:
-        """Resumes a paused `AWAITING_HUMAN_APPROVAL` thread with a compliance officer decision."""
+        thread_id: str,
+        review: HumanReviewDecisionRequest,
+        request: Request,
+        response: Response,
+    ) -> Any:
+        """Resumes a paused `AWAITING_HUMAN_APPROVAL` thread with an authenticated compliance officer decision."""
+        officer_principal = (
+            request.headers.get("X-Compliance-Officer-ID")
+            or request.headers.get("X-Officer-ID")
+            or request.headers.get("X-Reviewer-ID")
+        )
+        api_key = request.headers.get("X-API-Key")
+        auth_header = request.headers.get("Authorization")
+        if not api_key and auth_header:
+            if auth_header.lower().startswith("bearer "):
+                api_key = auth_header[7:].strip()
+            else:
+                api_key = auth_header.strip()
+
+        expected_key = os.getenv("FINGUARD_COMPLIANCE_KEY") or os.getenv("FINGUARD_API_KEY")
+        if expected_key:
+            if not api_key or api_key != expected_key:
+                raise HTTPException(status_code=401, detail="Invalid or missing compliance officer authorization.")
+        elif not officer_principal and not api_key:
+            raise HTTPException(
+                status_code=401,
+                detail="Compliance officer authorization required: provide X-Compliance-Officer-ID or X-API-Key header.",
+            )
+
+        authenticated_reviewer = officer_principal or (f"API-KEY:{api_key}" if api_key else None)
+
+        client_key = _extract_client_key(request)
+        allowed, remaining, retry_after = rate_limiter.check_request(client_key)
+        response.headers["X-RateLimit-Limit"] = str(rate_limiter.max_requests)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Limit": str(rate_limiter.max_requests),
+                    "X-RateLimit-Remaining": "0",
+                },
+                content={
+                    "error": "rate_limit_exceeded",
+                    "message": f"Rate limit of {rate_limiter.max_requests} requests/minute exceeded.",
+                    "retry_after_seconds": retry_after,
+                },
+            )
+
         try:
-            return agent_graph.resume_paused_thread(thread_id=thread_id, review=review)
+            return agent_graph.resume_paused_thread(
+                thread_id=thread_id,
+                review=review,
+                authenticated_reviewer_id=authenticated_reviewer,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -381,8 +471,32 @@ if FASTAPI_AVAILABLE:
         return engine.mcp_server.list_tools()
 
     @app.post("/v1/mcp/call", response_model=MCPToolCallResult)
-    async def call_mcp_tool_endpoint(payload: MCPToolCallRequest) -> MCPToolCallResult:
-        """Executes a read-only MCP SQL tool and logs the invocation to `mcp_tool_audit_log`."""
+    async def call_mcp_tool_endpoint(
+        payload: MCPToolCallRequest, request: Request, response: Response
+    ) -> Any:
+        """Executes a read-only MCP SQL tool with authentication and sliding-window rate limiting."""
+        _authenticate_request(request)
+
+        client_key = _extract_client_key(request)
+        allowed, remaining, retry_after = rate_limiter.check_request(client_key)
+        response.headers["X-RateLimit-Limit"] = str(rate_limiter.max_requests)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+
+        if not allowed:
+            return JSONResponse(
+                status_code=429,
+                headers={
+                    "Retry-After": str(retry_after),
+                    "X-RateLimit-Limit": str(rate_limiter.max_requests),
+                    "X-RateLimit-Remaining": "0",
+                },
+                content={
+                    "error": "rate_limit_exceeded",
+                    "message": f"Rate limit of {rate_limiter.max_requests} requests/minute exceeded.",
+                    "retry_after_seconds": retry_after,
+                },
+            )
+
         return engine.mcp_server.call_tool(payload.tool_name, payload.arguments)
 
     @app.post("/v1/disputes/stream")

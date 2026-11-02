@@ -14,6 +14,7 @@ Implements:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import time
@@ -40,8 +41,10 @@ class ComplianceSQLStore:
         re.IGNORECASE,
     )
 
-    def __init__(self, db_path: str = ":memory:") -> None:
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+    def __init__(self, db_path: Optional[str] = None) -> None:
+        resolved_path = db_path if db_path is not None else os.getenv("FINGUARD_DB_PATH", "finguard_compliance.db")
+        self.db_path = resolved_path
+        self.conn = sqlite3.connect(resolved_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
@@ -184,14 +187,52 @@ class ComplianceSQLStore:
             "updated_at": row["updated_at"],
         }
 
-    def execute_safe_readonly_sql(self, query: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    def execute_safe_readonly_sql(
+        self,
+        query: str,
+        params: Tuple[Any, ...] = (),
+        max_rows: int = 1000,
+        timeout_seconds: float = 5.0,
+    ) -> List[Dict[str, Any]]:
         stripped = query.strip()
         if not stripped.upper().startswith("SELECT"):
             raise PermissionError("Security Guardrail: Only SELECT queries are permitted on the audit store.")
         if self.FORBIDDEN_SQL_TOKENS.search(stripped) or ";" in stripped[:-1]:
             raise PermissionError("Security Guardrail: Destructive or multi-statement SQL tokens blocked.")
-        cur = self.conn.execute(stripped, params)
-        return [dict(row) for row in cur.fetchall()]
+
+        def authorizer_callback(action: int, arg1: Any, arg2: Any, dbname: Any, trigger: Any) -> int:
+            if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_FUNCTION):
+                return sqlite3.SQLITE_OK
+            if action == sqlite3.SQLITE_READ:
+                # Restrict read access only to dispute_triage_audit
+                if arg1 in ("dispute_triage_audit", None, ""):
+                    return sqlite3.SQLITE_OK
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_DENY
+
+        start_time = time.perf_counter()
+
+        def progress_callback() -> int:
+            if time.perf_counter() - start_time > timeout_seconds:
+                return 1  # Abort query execution
+            return 0
+
+        self.conn.set_authorizer(authorizer_callback)
+        self.conn.set_progress_handler(progress_callback, 1000)
+
+        try:
+            cur = self.conn.execute(stripped, params)
+            rows = cur.fetchmany(max_rows)
+            return [dict(row) for row in rows]
+        except sqlite3.DatabaseError as exc:
+            raise PermissionError(f"Security Guardrail: Query rejected by SQLite security authorizer: {exc}") from exc
+        except sqlite3.OperationalError as exc:
+            if "interrupted" in str(exc).lower():
+                raise TimeoutError(f"Security Guardrail: SQL query exceeded {timeout_seconds}s timeout limit.") from exc
+            raise
+        finally:
+            self.conn.set_authorizer(lambda *_args: sqlite3.SQLITE_OK)
+            self.conn.set_progress_handler(None, 0)
 
     def get_recent_audit_logs(self, limit: int = 20) -> List[Dict[str, Any]]:
         return self.execute_safe_readonly_sql(
@@ -329,17 +370,22 @@ class FinGuardMCPServer:
                 rows = self.sql_store.execute_safe_readonly_sql(
                     """
                     SELECT
-                        COUNT(*) AS prior_disputes_count,
+                        COUNT(DISTINCT transaction_id) AS prior_disputes_count,
                         COALESCE(SUM(amount_inr), 0.0) AS total_disputed_inr,
-                        SUM(CASE WHEN dispute_category = 'UNAUTHORIZED_FRAUD' THEN 1 ELSE 0 END) AS prior_fraud_claims
-                    FROM dispute_triage_audit
-                    WHERE customer_id = ?
+                        COALESCE(SUM(CASE WHEN dispute_category = 'UNAUTHORIZED_FRAUD' THEN 1 ELSE 0 END), 0) AS prior_fraud_claims
+                    FROM (
+                        SELECT transaction_id, MAX(amount_inr) AS amount_inr, MAX(dispute_category) AS dispute_category
+                        FROM dispute_triage_audit
+                        WHERE customer_id = ?
+                          AND datetime(created_at) >= datetime('now', '-90 days')
+                        GROUP BY transaction_id
+                    )
                     """,
                     (customer_id,),
                 )
                 stats = rows[0] if rows else {"prior_disputes_count": 0, "total_disputed_inr": 0.0, "prior_fraud_claims": 0}
-                prior_count = int(stats["prior_disputes_count"] or 0)
-                total_inr = float(stats["total_disputed_inr"] or 0.0)
+                prior_count = int(stats.get("prior_disputes_count") or 0)
+                total_inr = float(stats.get("total_disputed_inr") or 0.0)
 
                 if prior_count >= 3 or total_inr >= 200_000.0:
                     risk_tier = "HIGH_VELOCITY_ABUSE"

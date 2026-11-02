@@ -884,15 +884,17 @@ def test_day6_docker_and_compose_manifests_valid() -> None:
 
 def test_day7_documentation_and_adr_completeness() -> None:
     readme_path = Path("README.md")
-    decisions_path = Path("DECISIONS.md")
-    if readme_path.exists():
-        readme_text = readme_path.read_text(encoding="utf-8")
-        assert "```mermaid" in readme_text
-        assert "INR 14.36" in readme_text
-    if decisions_path.exists():
-        decisions_text = decisions_path.read_text(encoding="utf-8")
-        for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
-            assert adr_id in decisions_text, f"Missing {adr_id} in DECISIONS.md"
+    decisions_path = Path("decisions.md")
+    assert readme_path.exists(), "README.md does not exist"
+    assert decisions_path.exists(), "decisions.md does not exist"
+
+    readme_text = readme_path.read_text(encoding="utf-8")
+    assert "```mermaid" in readme_text
+    assert "INR 14.36" in readme_text
+
+    decisions_text = decisions_path.read_text(encoding="utf-8")
+    for adr_id in ("ADR-001", "ADR-002", "ADR-003", "ADR-004", "ADR-005", "ADR-006", "ADR-007"):
+        assert adr_id in decisions_text, f"Missing {adr_id} in decisions.md"
 
 
 def test_phase2_mcp_server_tools_and_sql_audit() -> None:
@@ -937,7 +939,22 @@ def test_phase2_langgraph_4node_workflow_and_hitl_checkpoint() -> None:
     assert len(wf_result.mcp_tool_calls) == 1
     assert wf_result.mcp_tool_calls[0].tool_name == "get_customer_dispute_history"
 
-    # Now resume the paused thread with a Compliance Officer decision
+    # Verify that an excessive override liability (> transaction amount) is rejected
+    try:
+        graph.resume_paused_thread(
+            thread_id="FG-THREAD-TEST01",
+            review=HumanReviewDecisionRequest(
+                reviewer_id="OFFICER-PUNE-09",
+                decision="APPROVE_SHADOW_CREDIT",
+                override_liability_inr=999_999.0,
+                reviewer_notes="Excessive liability should be blocked.",
+            ),
+        )
+        assert False, "Expected ValueError for excessive override_liability_inr"
+    except ValueError:
+        pass
+
+    # Now resume the paused thread with a valid Compliance Officer decision
     resumed = graph.resume_paused_thread(
         thread_id="FG-THREAD-TEST01",
         review=HumanReviewDecisionRequest(

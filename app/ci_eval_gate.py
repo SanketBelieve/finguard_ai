@@ -24,22 +24,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from main import generate_container_manifests
-from test_evals import (
-    run_evaluation_suite,
-    test_adversarial_prompt_injection_is_blocked_without_leak,
-    test_day3_llm_timeout_triggers_deterministic_fallback,
-    test_day3_structured_llm_synthesis_happy_path,
-    test_day6_docker_and_compose_manifests_valid,
-    test_day6_sliding_window_rate_limiter_enforces_quota,
-    test_day7_documentation_and_adr_completeness,
-    test_eval_suite_passes_quality_gates,
-    test_pdfplumber_ingests_and_indexes_real_pdfs,
-    test_phase2_langgraph_4node_workflow_and_hitl_checkpoint,
-    test_phase2_mcp_server_tools_and_sql_audit,
-    test_pydantic_coerces_formatted_inr_strings,
-    test_sql_guardrail_blocks_destructive_queries,
-)
+try:
+    from app.main import generate_container_manifests
+    from app.test_evals import (
+        run_evaluation_suite,
+        test_adversarial_prompt_injection_is_blocked_without_leak,
+        test_day3_llm_timeout_triggers_deterministic_fallback,
+        test_day3_structured_llm_synthesis_happy_path,
+        test_day6_docker_and_compose_manifests_valid,
+        test_day6_sliding_window_rate_limiter_enforces_quota,
+        test_day7_documentation_and_adr_completeness,
+        test_eval_suite_passes_quality_gates,
+        test_pdfplumber_ingests_and_indexes_real_pdfs,
+        test_phase2_langgraph_4node_workflow_and_hitl_checkpoint,
+        test_phase2_mcp_server_tools_and_sql_audit,
+        test_pydantic_coerces_formatted_inr_strings,
+        test_sql_guardrail_blocks_destructive_queries,
+    )
+except ImportError:
+    from main import generate_container_manifests
+    from test_evals import (
+        run_evaluation_suite,
+        test_adversarial_prompt_injection_is_blocked_without_leak,
+        test_day3_llm_timeout_triggers_deterministic_fallback,
+        test_day3_structured_llm_synthesis_happy_path,
+        test_day6_docker_and_compose_manifests_valid,
+        test_day6_sliding_window_rate_limiter_enforces_quota,
+        test_day7_documentation_and_adr_completeness,
+        test_eval_suite_passes_quality_gates,
+        test_pdfplumber_ingests_and_indexes_real_pdfs,
+        test_phase2_langgraph_4node_workflow_and_hitl_checkpoint,
+        test_phase2_mcp_server_tools_and_sql_audit,
+        test_pydantic_coerces_formatted_inr_strings,
+        test_sql_guardrail_blocks_destructive_queries,
+    )
 
 
 GITHUB_ACTIONS_WORKFLOW_YAML = """name: FinGuard AI — CI/CD RAG, MCP & Agent Security Quality Gate
@@ -74,11 +92,11 @@ jobs:
 
       - name: Run Pytest Unit, PDF, LLM, MCP, LangGraph & Security Suite
         run: |
-          PYTHONPATH=. pytest test_evals.py -v
+          PYTHONPATH=.:app pytest app/test_evals.py -v
 
       - name: Enforce 36-Case Golden Dataset Quality Gate & Publish PR Summary
         run: |
-          PYTHONPATH=. python3 ci_eval_gate.py \\
+          PYTHONPATH=.:app python3 ci_eval_gate.py \\
             --min-accuracy 98.0 \\
             --min-faithfulness 98.0 \\
             --min-injection-block 100.0 \\

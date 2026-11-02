@@ -19,20 +19,37 @@ try:
     from database import ComplianceSQLStore, FinGuardMCPServer
 except ImportError:
     from app.database import ComplianceSQLStore, FinGuardMCPServer
-from retriever import HybridComplianceRetriever
-from router import DeterministicFinTechRouter
-from schemas import (
-    AgentWorkflowResult,
-    DisputeCategory,
-    DisputeIntakeRequest,
-    EscalationAction,
-    HumanReviewDecisionRequest,
-    LLMSynthesisDraft,
-    MCPToolCallResult,
-    PaymentRail,
-    RBIComplianceCitation,
-    TriageVerdict,
-)
+
+try:
+    from retriever import HybridComplianceRetriever
+    from router import DeterministicFinTechRouter
+    from schemas import (
+        AgentWorkflowResult,
+        DisputeCategory,
+        DisputeIntakeRequest,
+        EscalationAction,
+        HumanReviewDecisionRequest,
+        LLMSynthesisDraft,
+        MCPToolCallResult,
+        PaymentRail,
+        RBIComplianceCitation,
+        TriageVerdict,
+    )
+except ImportError:
+    from app.retriever import HybridComplianceRetriever
+    from app.router import DeterministicFinTechRouter
+    from app.schemas import (
+        AgentWorkflowResult,
+        DisputeCategory,
+        DisputeIntakeRequest,
+        EscalationAction,
+        HumanReviewDecisionRequest,
+        LLMSynthesisDraft,
+        MCPToolCallResult,
+        PaymentRail,
+        RBIComplianceCitation,
+        TriageVerdict,
+    )
 
 
 class StructuredRunnable(Protocol):
@@ -598,7 +615,10 @@ class FinGuardStatefulAgentGraph:
         return result
 
     def resume_paused_thread(
-        self, thread_id: str, review: HumanReviewDecisionRequest
+        self,
+        thread_id: str,
+        review: HumanReviewDecisionRequest,
+        authenticated_reviewer_id: Optional[str] = None,
     ) -> AgentWorkflowResult:
         """
         Resumes a thread paused at `AWAITING_HUMAN_APPROVAL` from its SQLite
@@ -614,6 +634,19 @@ class FinGuardStatefulAgentGraph:
         if result.workflow_status != "AWAITING_HUMAN_APPROVAL":
             raise ValueError(f"Thread {thread_id} is not awaiting approval (status={result.workflow_status})")
 
+        # Validate override_liability_inr against transaction amount from trusted checkpoint data
+        checkpoint_req = checkpoint.get("request", {})
+        tx_amount = float(checkpoint_req.get("amount_inr", 0.0))
+        if review.override_liability_inr is not None:
+            if review.override_liability_inr < 0.0 or review.override_liability_inr > tx_amount:
+                raise ValueError(
+                    f"Invalid liability override: ₹{review.override_liability_inr} must be "
+                    f"between ₹0.0 and transaction amount ₹{tx_amount}"
+                )
+
+        # Derive reviewer identity from authenticated principal rather than request's reviewer_id if provided
+        reviewer_id = authenticated_reviewer_id or review.reviewer_id
+
         result.node_trace.append("human_compliance_resolution_node")
         if review.decision == "APPROVE_SHADOW_CREDIT":
             result.verdict.escalation_action = EscalationAction.ZERO_LIABILITY_SHADOW_CREDIT
@@ -625,7 +658,7 @@ class FinGuardStatefulAgentGraph:
             if review.override_liability_inr is not None:
                 result.verdict.max_customer_liability_inr = review.override_liability_inr
 
-        note = f"[Reviewed by {review.reviewer_id}: {review.decision}] {review.reviewer_notes}"
+        note = f"[Reviewed by {reviewer_id}: {review.decision}] {review.reviewer_notes}"
         result.human_review_notes = note
         result.verdict.rationale = f"{result.verdict.rationale} | {note}"
         result.workflow_status = "COMPLETED"
