@@ -37,11 +37,11 @@ if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
 from database import ComplianceSQLStore
-from engine import FinGuardTriageEngine
-from main import SlidingWindowRateLimiter, validate_container_manifests
-from retriever import RBIPDFChunker, RegulatoryVectorStore
-from router import DeterministicFinTechRouter
-from schemas import (
+from app.engine import FinGuardTriageEngine
+from app.main import SlidingWindowRateLimiter, validate_container_manifests
+from app.retriever import RBIPDFChunker, RegulatoryVectorStore
+from app.router import DeterministicFinTechRouter
+from app.schemas import (
     DisputeCategory,
     DisputeIntakeRequest,
     EscalationAction,
