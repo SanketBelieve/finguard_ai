@@ -62,6 +62,12 @@ class DeterministicFinTechRouter:
 
     @classmethod
     def classify_fast(cls, req: DisputeIntakeRequest) -> Optional[DisputeCategory]:
+        """Return a category for a recognized narrative, or None for full triage.
+
+        Out-of-scope patterns take precedence. Failed-debit matches require UPI
+        or IMPS, an amount at most INR 50,000, and neither 'fraud' nor
+        'unauthorized' in the narrative. Matching is case-insensitive.
+        """
         text = req.customer_narrative.lower()
 
         # Step 1: Adversarial Prompt-Injection & Security Defense
